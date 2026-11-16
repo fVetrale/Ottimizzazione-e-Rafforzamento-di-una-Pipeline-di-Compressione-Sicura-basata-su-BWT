@@ -1,0 +1,4 @@
+# Dataset di benchmark copiato da "Analisi BZIP2 Grano": non versionato (~80 MB).
+# Elenco e hash dei file in benchmarks/dataset_manifest.csv
+*
+!.gitignore

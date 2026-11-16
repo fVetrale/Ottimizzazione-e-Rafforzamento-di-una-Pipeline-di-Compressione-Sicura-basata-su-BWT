@@ -1,0 +1,79 @@
+{
+  "data": "2026-11-16T12:18:13",
+  "etichetta": "baseline",
+  "git_commit": "fac319eb01f5c27cad83260ef665dccecd8c1be5",
+  "git_describe": "fac319e",
+  "git_modifiche_locali": "?? src/TestFiles/Input/benchmark/",
+  "python": "3.13.13",
+  "python_exe": "/home/filippo/Scrivania/Ottimizzazione-e-Rafforzamento-di-una-Pipeline-di-Compressione-Sicura-basata-su-BWT/.venv/bin/python",
+  "librerie": {
+    "numpy": "2.3.5",
+    "dahuffman": "0.4.2",
+    "mpi4py": "4.1.1"
+  },
+  "bzip2": "",
+  "sistema": "Linux-6.17.0-1032-oem-x86_64-with-glibc2.43",
+  "cpu": "AMD Ryzen AI 5 PRO 340 w/ Radeon 840M",
+  "core_logici": 12,
+  "ram_gb": 27.1,
+  "parametri": {
+    "corpora": "canterbury,calgary,large,silesia",
+    "files": "",
+    "modes": "0",
+    "extra_modes": "1,2",
+    "extra_corpora": "canterbury",
+    "reps": 3,
+    "warmup": 1,
+    "timeout": 1800,
+    "label": "baseline",
+    "no_bzip2": false,
+    "keep_logs": false,
+    "out": ""
+  },
+  "file": {
+    "canterbury": [
+      "grammar.lsp",
+      "xargs.1",
+      "fields.c",
+      "cp.html",
+      "sum",
+      "asyoulik.txt",
+      "alice29.txt",
+      "lcet10.txt",
+      "plrabn12.txt",
+      "ptt5",
+      "kennedy.xls"
+    ],
+    "calgary": [
+      "obj1",
+      "progc",
+      "progp",
+      "paper1",
+      "progl.txt",
+      "paper2",
+      "trans",
+      "geo",
+      "bib",
+      "obj2",
+      "news.eml",
+      "pic",
+      "book2",
+      "book1"
+    ],
+    "large": [
+      "world192.txt",
+      "bible.txt",
+      "E.coli"
+    ],
+    "silesia": [
+      "xml.tar",
+      "ooffice",
+      "reymont.pdf",
+      "sao",
+      "x-ray",
+      "mr",
+      "osdb",
+      "dickens"
+    ]
+  }
+}
