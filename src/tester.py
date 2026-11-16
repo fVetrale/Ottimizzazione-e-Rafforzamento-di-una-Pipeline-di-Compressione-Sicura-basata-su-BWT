@@ -1,4 +1,4 @@
-import compression
+import sbwt_compress as compression
 import decompression
 import sys
 import filecmp

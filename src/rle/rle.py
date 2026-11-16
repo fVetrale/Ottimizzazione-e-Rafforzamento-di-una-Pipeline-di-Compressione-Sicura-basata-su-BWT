@@ -126,7 +126,7 @@ class Rle:
 		for char in data:
 			# If the character is numerical...
 			if char != "":
-				x = re.search("-\d+$", char)
+				x = re.search(r"-\d+$", char)
 				if x:
 					char = char.split("-")
 					decode += (char[1]+",") * int(char[0])
