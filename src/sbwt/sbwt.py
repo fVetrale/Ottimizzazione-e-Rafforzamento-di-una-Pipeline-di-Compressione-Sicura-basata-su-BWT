@@ -37,7 +37,7 @@ def bwt_bytes(data: bytes, key) -> tuple[bytes, int]:
 
     symbols = list(data)
     doubled = symbols + symbols
-    suffixes = suffix.buildSuffixArrayDC3(doubled, key)
+    suffixes = suffix.buildSuffixArrayDivsufsort(doubled, key)
     rotations = [start for start in suffixes if start < len(data)]
     primary_index = rotations.index(0)
     transformed = bytes(data[(start - 1) % len(data)] for start in rotations)
