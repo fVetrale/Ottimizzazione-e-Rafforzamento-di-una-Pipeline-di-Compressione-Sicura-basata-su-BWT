@@ -9,20 +9,26 @@ except ImportError:
         import fast_mtf
 
 
-def encode(plain_text: str, dictionary) -> List[int]:
+def encode(plain_text: str | bytes, dictionary) -> List[int]:
     """
     Esegue la trasformata Move-To-Front (MTF).
     Ottimizzato con Numba su array contigui a dimensione fissa.
+    Accetta testo (str) oppure byte (bytes).
     """
     return fast_mtf.fast_mtf_encode(plain_text, dictionary)
 
 
-def decode(compressed_text: List[int], dictionary) -> str:
+def decode(compressed_text: List[int], dictionary) -> str | bytes:
     """
     Esegue la trasformata inversa Move-To-Front (I-MTF).
-    Ottimizzato con Numba su array contigui a dimensione fissa.
+    Restituisce str con un alfabeto di caratteri, bytes con un alfabeto di interi.
     """
-    return fast_mtf.fast_mtf_decode(compressed_text, dictionary)
+    output = fast_mtf.fast_mtf_decode(compressed_text, dictionary)
+    if isinstance(output, str):
+        return output
+    if any(not 0 <= symbol <= 255 for symbol in output):
+        raise ValueError("byte alphabet contains a symbol outside [0, 255]")
+    return bytes(output)
 
 
 if __name__ == "__main__":

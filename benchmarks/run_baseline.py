@@ -15,11 +15,16 @@ Cosa fa:
   * scrive i CSV in benchmarks/results/<etichetta>_<data>/ man mano (un'interruzione
     non perde i risultati già raccolti).
 
+Dalla fase 3 misura la pipeline a byte: la compressione scrive un solo file
+(TestFiles/Output/compressed.sbwt), quindi non ci sono più file di metadati né
+hash degli stadi intermedi (le colonne restano, vuote, per confrontare i CSV con
+la baseline). Se dopo la compressione in Output compare un altro file, la prova
+viene segnata come errore. Solo il modo 0 (Huffman) è supportato.
+
 Solo Linux (usa /proc e os.wait4).
 """
 import argparse
 import csv
-import hashlib
 import json
 import os
 import platform
@@ -41,14 +46,13 @@ DRIVER = BENCH / "_driver.py"
 CORPORA = ["canterbury", "calgary", "large", "silesia"]
 CODERS = {0: "sbwt-huffman", 1: "sbwt-arithmetic", 2: "sbwt-lzw"}
 
-# File necessari alla decompressione: payload + metadati, per modo.
-PAYLOAD = "outputPC.txt"
-METADATA_COMMON = ["outputDictBWT.txt", "rfile.txt", "bfile.txt", "bFileMTF.txt"]
-METADATA_MODE = {0: ["outputPCCodec.txt"], 1: [], 2: ["outputDictLZW.txt"]}
+# Fase 3: un solo file contiene tutto ciò che serve alla decompressione.
+PAYLOAD = "compressed.sbwt"
+# File che possono trovarsi in Output senza essere prodotti dalla compressione.
+OUTPUT_ALLOWED = {"README.md", PAYLOAD}
 
 PHASE_RE = re.compile(r"^\s*([0-9.]+(?:e-?\d+)?)\s+->\s+elapsed time of\s+(.+?)\s*$")
-MIN_BLOCK = 256 * 1024
-MAX_BLOCK = 2 * 1024 * 1024
+BWT_BLOCK_SIZE = 900 * 1024   # come pipeline.BWT_BLOCK_SIZE
 
 RESULT_FIELDS = [
     "label", "corpus", "file", "size_bytes", "coder", "rep", "warmup", "status", "error",
@@ -145,13 +149,6 @@ def parse_log(path):
     return phases, internal, error
 
 
-def sha256_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
 
 def files_equal(a, b):
     if os.path.getsize(a) != os.path.getsize(b):
@@ -166,10 +163,12 @@ def files_equal(a, b):
 
 
 def bwt_mode(size):
-    """Replica la scelta di sbwt_compress.py: file intero o blocchi (con r casuale)."""
-    nproc = os.cpu_count() or 1
-    block_length = max(MIN_BLOCK, min(size // nproc, MAX_BLOCK))
-    return "block" if max(1, size // block_length) > 1 else "full"
+    """Replica la scelta di pipeline.py: un solo blocco o più blocchi.
+
+    Dalla fase 3 i blocchi hanno dimensione fissa (BWT_BLOCK_SIZE) e l'ultimo
+    può essere più corto (divisione per eccesso).
+    """
+    return "block" if -(-size // BWT_BLOCK_SIZE) > 1 else "full"
 
 
 # --------------------------------------------------------------------------- esecuzioni
@@ -243,13 +242,13 @@ def run_sbwt(args, wsrc, logs, label, corpus, path, mode, rep, warmup):
             error = f"{step}: {err or 'exit ' + str(m['returncode'])}"
         if status != "ok":
             break
-        if step == "compress" and (out_dir / "outputBWT.txt").exists():
-            row["sha256_bwt"] = sha256_file(out_dir / "outputBWT.txt")
-            row["sha256_mtf"] = sha256_file(out_dir / "outputMTF.txt")
-            payload = (out_dir / PAYLOAD).stat().st_size
-            meta = sum((out_dir / f).stat().st_size
-                       for f in METADATA_COMMON + METADATA_MODE[mode] if (out_dir / f).exists())
-            row["payload_bytes"], row["metadata_bytes"] = payload, meta
+        if step == "compress":
+            extra = sorted(p.name for p in out_dir.iterdir() if p.name not in OUTPUT_ALLOWED)
+            if extra or not (out_dir / PAYLOAD).exists():
+                status = "error"
+                error = f"compress: file inattesi in Output {extra}" if extra else "compress: manca " + PAYLOAD
+                break
+            row["payload_bytes"], row["metadata_bytes"] = (out_dir / PAYLOAD).stat().st_size, 0
 
     if status == "ok":
         if not files_equal(path, out_dir / "decompressed.txt"):
@@ -391,7 +390,8 @@ def main():
     ap.add_argument("--corpora", default=",".join(CORPORA), help="elenco separato da virgole")
     ap.add_argument("--files", default="", help="limita ai file con questi nomi (virgole)")
     ap.add_argument("--modes", default="0", help="modi sBWT su tutti i corpus (0=Huffman, 1=Arith, 2=LZW)")
-    ap.add_argument("--extra-modes", default="1,2", help="modi aggiuntivi solo su --extra-corpora")
+    ap.add_argument("--extra-modes", default="",
+                    help="modi aggiuntivi solo su --extra-corpora (dalla fase 3 esiste solo il modo 0)")
     ap.add_argument("--extra-corpora", default="canterbury")
     ap.add_argument("--reps", type=int, default=3, help="ripetizioni misurate per file")
     ap.add_argument("--warmup", type=int, default=1, help="esecuzioni iniziali scartate per file")

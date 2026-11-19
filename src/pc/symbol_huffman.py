@@ -10,11 +10,16 @@ Progettato per la Fase 2 della pipeline sBWT + bMTF:
 - Già predisposto per l'integrazione nell'header binario della Fase 3.
 """
 
-from typing import List, Sequence, Tuple, Dict, Union
+from typing import List, Optional, Sequence, Tuple, Dict, Union
 from collections import Counter
 import heapq
 import struct
 import numpy as np
+
+# Lunghezza massima accettata per un codice letto da file. Un codice di Huffman
+# più lungo di 64 bit richiederebbe più di 10^13 simboli (frequenze di
+# Fibonacci), quindi il limite non esclude nessun file prodotto dall'encoder.
+MAX_CODE_LENGTH = 64
 
 
 class BitWriter:
@@ -33,6 +38,10 @@ class BitWriter:
             self.bits_in_accum -= 8
             byte = (self.bit_accum >> self.bits_in_accum) & 0xFF
             self.buffer.append(byte)
+        # Tiene solo i bit non ancora emessi: senza questa maschera l'accumulatore
+        # cresce fino a contenere l'intero stream e ogni shift costa O(n),
+        # rendendo la codifica quadratica nel numero di simboli.
+        self.bit_accum &= (1 << self.bits_in_accum) - 1
 
     def flush(self) -> Tuple[bytes, int]:
         """Finalizza lo stream allineando all'ultimo byte. Restituisce (bytes, total_bits)."""
@@ -157,6 +166,34 @@ def build_canonical_codes_from_lengths(code_lengths: Dict[int, int]) -> Dict[int
     return canonical_codes
 
 
+def validate_code_lengths(code_lengths: Dict[int, int], max_symbol: Optional[int] = None) -> None:
+    """
+    Controlla che una tabella di lunghezze (letta da un file non fidato) descriva
+    un codice di Huffman valido, prima di costruire l'albero di decodifica.
+
+    - simboli interi in [0, max_symbol] e lunghezze in [1, MAX_CODE_LENGTH];
+    - un solo simbolo: lunghezza 1 (è ciò che produce l'encoder);
+    - più simboli: disuguaglianza di Kraft con uguaglianza, sum(2^-l) == 1.
+      Un codice di Huffman è sempre completo; con somma > 1 i codici canonici
+      si sovrappongono, con somma < 1 restano sequenze di bit senza simbolo.
+
+    Raises:
+        ValueError: se la tabella non è valida.
+    """
+    for sym, length in code_lengths.items():
+        if not isinstance(sym, int) or sym < 0 or (max_symbol is not None and sym > max_symbol):
+            raise ValueError(f"simbolo non ammesso nella tabella di Huffman: {sym}")
+        if not isinstance(length, int) or not 1 <= length <= MAX_CODE_LENGTH:
+            raise ValueError(f"lunghezza di codice non valida: {length}")
+    if len(code_lengths) == 1:
+        if next(iter(code_lengths.values())) != 1:
+            raise ValueError("una tabella con un solo simbolo deve avere lunghezza 1")
+    elif len(code_lengths) > 1:
+        kraft = sum(1 << (MAX_CODE_LENGTH - length) for length in code_lengths.values())
+        if kraft != 1 << MAX_CODE_LENGTH:
+            raise ValueError("le lunghezze dei codici non formano un codice di Huffman completo")
+
+
 def build_decode_tree(canonical_codes: Dict[int, Tuple[int, int]]) -> HuffmanDecodeNode:
     """Costruisce un albero di decodifica binario a partire dai codici canonici."""
     root = HuffmanDecodeNode()
@@ -204,20 +241,36 @@ def huffman_encode_symbols(symbols: Union[Sequence[int], np.ndarray]) -> Tuple[b
     return encoded_bytes, code_lengths, num_symbols
 
 
-def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbols: int) -> List[int]:
+def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbols: int,
+                           max_symbol: Optional[int] = None) -> List[int]:
     """
     Decodifica un flusso di byte in simboli interi usando le lunghezze canoniche.
-    
+
     Args:
         data: Flusso di byte compressi.
         code_lengths: Dizionario {simbolo: lunghezza}.
         num_symbols: Numero esatto di simboli da decodificare.
-        
+        max_symbol: se indicato, valore massimo ammesso per un simbolo.
+
     Returns:
         Lista di simboli interi originali.
+
+    Raises:
+        ValueError: tabella non valida, bit insufficienti, byte in eccesso o
+            bit di riempimento diversi da zero (il flusso deve essere esattamente
+            quello prodotto da huffman_encode_symbols).
     """
     if num_symbols == 0:
+        if data:
+            raise ValueError("flusso di bit non vuoto per zero simboli")
         return []
+
+    validate_code_lengths(code_lengths, max_symbol)
+    if not code_lengths:
+        raise ValueError("tabella di Huffman vuota per un flusso non vuoto")
+    # Ogni simbolo occupa almeno un bit: si scarta subito un conteggio impossibile.
+    if num_symbols > len(data) * 8:
+        raise ValueError("il flusso di bit è troppo corto per il numero di simboli dichiarato")
 
     canonical_codes = build_canonical_codes_from_lengths(code_lengths)
     root = build_decode_tree(canonical_codes)
@@ -225,8 +278,12 @@ def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbol
     reader = BitReader(data)
     output: List[int] = []
 
-    # Caso speciale con un solo simbolo unico
-    if root.left is None and root.right is None:
+    # Caso speciale con un solo simbolo unico: l'encoder scrive un bit 0 per simbolo.
+    # (Il codice (0, 1) crea un ramo sinistro, quindi la radice non è mai una
+    # foglia: il caso si riconosce dalla tabella, non dalla forma dell'albero.)
+    if len(code_lengths) == 1:
+        if len(data) != -(-num_symbols // 8) or any(data):
+            raise ValueError("flusso di bit non valido per una tabella con un solo simbolo")
         sym = next(iter(code_lengths))
         return [sym] * num_symbols
 
@@ -240,9 +297,15 @@ def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbol
                 curr = curr.right
             else:
                 raise ValueError("Flusso di bit terminato inaspettatamente prima di completare i simboli.")
+            if curr is None:
+                raise ValueError("sequenza di bit che non corrisponde a nessun codice")
         output.append(curr.symbol)
         curr = root
 
+    if reader.byte_pos != reader.total_bytes:
+        raise ValueError("byte in eccesso dopo l'ultimo simbolo")
+    if reader.bit_accum & ((1 << reader.bits_in_accum) - 1):
+        raise ValueError("bit di riempimento diversi da zero")
     return output
 
 
@@ -267,15 +330,26 @@ def deserialize_code_lengths(raw: bytes, offset: int = 0) -> Tuple[Dict[int, int
     """
     Deserializza la tabella delle lunghezze dal buffer binario a partire da offset.
     Restituisce: (code_lengths, bytes_letti).
+
+    Raises:
+        ValueError: tabella troncata o simboli non in ordine strettamente
+            crescente (serialize_code_lengths li scrive ordinati; un duplicato
+            sovrascriverebbe in silenzio la lunghezza precedente).
     """
     if len(raw) < offset + 2:
-        return {}, 0
+        raise ValueError("tabella di Huffman troncata")
     n = struct.unpack_from("<H", raw, offset)[0]
     pos = offset + 2
+    if len(raw) < pos + 3 * n:
+        raise ValueError("tabella di Huffman troncata")
     code_lengths: Dict[int, int] = {}
+    previous = -1
     for _ in range(n):
         sym, length = struct.unpack_from("<HB", raw, pos)
+        if sym <= previous:
+            raise ValueError("simboli della tabella di Huffman duplicati o non ordinati")
         code_lengths[sym] = length
+        previous = sym
         pos += 3
     return code_lengths, pos - offset
 

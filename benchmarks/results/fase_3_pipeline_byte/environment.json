@@ -1,0 +1,64 @@
+{
+  "data": "2026-11-19T17:17:43",
+  "etichetta": "fase_3_pipeline_byte",
+  "git_commit": "7583fad3ce8aa542de83c731f66e6e35c248aa59",
+  "git_describe": "7583fad-dirty",
+  "git_modifiche_locali": "M src/container_format.py\n M src/decompression.py\n M src/pc/symbol_huffman.py\n M src/sbwt_compress.py\n M src/tester.py\n?? src/pipeline.py",
+  "python": "3.13.13",
+  "python_exe": "/home/filippo/Scrivania/Ottimizzazione-e-Rafforzamento-di-una-Pipeline-di-Compressione-Sicura-basata-su-BWT/.venv/bin/python",
+  "librerie": {
+    "numpy": "2.3.5",
+    "dahuffman": "0.4.2",
+    "mpi4py": "4.1.1"
+  },
+  "bzip2": "",
+  "sistema": "Linux-6.17.0-1032-oem-x86_64-with-glibc2.43",
+  "cpu": "AMD Ryzen AI 5 PRO 340 w/ Radeon 840M",
+  "core_logici": 12,
+  "ram_gb": 27.1,
+  "parametri": {
+    "corpora": "canterbury,calgary",
+    "files": "",
+    "modes": "0",
+    "extra_modes": "",
+    "extra_corpora": "canterbury",
+    "reps": 3,
+    "warmup": 1,
+    "timeout": 1800,
+    "label": "fase_3_pipeline_byte",
+    "no_bzip2": false,
+    "keep_logs": false,
+    "out": "benchmarks/results/fase_3_pipeline_byte"
+  },
+  "file": {
+    "canterbury": [
+      "grammar.lsp",
+      "xargs.1",
+      "fields.c",
+      "cp.html",
+      "sum",
+      "asyoulik.txt",
+      "alice29.txt",
+      "lcet10.txt",
+      "plrabn12.txt",
+      "ptt5",
+      "kennedy.xls"
+    ],
+    "calgary": [
+      "obj1",
+      "progc",
+      "progp",
+      "paper1",
+      "progl.txt",
+      "paper2",
+      "trans",
+      "geo",
+      "bib",
+      "obj2",
+      "news.eml",
+      "pic",
+      "book2",
+      "book1"
+    ]
+  }
+}

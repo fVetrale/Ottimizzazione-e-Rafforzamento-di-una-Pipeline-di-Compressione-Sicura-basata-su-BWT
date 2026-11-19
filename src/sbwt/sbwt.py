@@ -22,6 +22,65 @@ def bwt_from_suffix(string, key, s_array=None, sa_algo="divsufsort"):
     # string[idx-1] corrisponde a un carattere dell'ultima colonna della matrice delle rotazioni della BWT
     return("".join(string[idx - 1] for idx in s_array))
 
+
+def bwt_bytes(data: bytes, key) -> tuple[bytes, int]:
+    """Transform bytes without a sentinel and return the primary row index.
+
+    Rotations are ordered by the existing secret alphabet order. The suffix
+    array is built over two copies and filtered to starts in the first copy,
+    which gives the order of cyclic rotations without adding an input symbol.
+    """
+    if not isinstance(data, bytes):
+        raise TypeError("data must be bytes")
+    if not data:
+        return b"", 0
+
+    symbols = list(data)
+    doubled = symbols + symbols
+    suffixes = suffix.buildSuffixArrayDivsufsort(doubled, key)
+    rotations = [start for start in suffixes if start < len(data)]
+    primary_index = rotations.index(0)
+    transformed = bytes(data[(start - 1) % len(data)] for start in rotations)
+    return transformed, primary_index
+
+
+def ibwt_bytes(last_column: bytes, key, primary_index: int) -> bytes:
+    """Invert :func:`bwt_bytes` using its primary row index."""
+    if not isinstance(last_column, bytes):
+        raise TypeError("last_column must be bytes")
+    if not last_column:
+        if primary_index != 0:
+            raise ValueError("empty transform requires primary_index=0")
+        return b""
+    if not isinstance(primary_index, int) or isinstance(primary_index, bool):
+        raise TypeError("primary_index must be an integer")
+    if not 0 <= primary_index < len(last_column):
+        raise ValueError("primary_index is outside the transformed block")
+
+    alphabet = sorted(set(last_column))
+    secret_order = customSort.getSecretSort(alphabet, key)
+    ordered_alphabet = sorted(alphabet, key=secret_order.__getitem__)
+
+    ranks = [0] * len(last_column)
+    counts = {symbol: 0 for symbol in alphabet}
+    for position, symbol in enumerate(last_column):
+        ranks[position] = counts[symbol]
+        counts[symbol] += 1
+
+    starts = {}
+    total = 0
+    for symbol in ordered_alphabet:
+        starts[symbol] = total
+        total += counts[symbol]
+
+    result = bytearray(len(last_column))
+    row = primary_index
+    for position in range(len(last_column) - 1, -1, -1):
+        symbol = last_column[row]
+        result[position] = symbol
+        row = starts[symbol] + ranks[row]
+    return bytes(result)
+
 # inversa della BWT che utilizza gli array dei suffissi
 def ibwt_from_suffix(string, key):
     """

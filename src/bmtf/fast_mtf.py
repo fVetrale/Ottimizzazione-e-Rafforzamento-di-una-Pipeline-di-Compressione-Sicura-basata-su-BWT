@@ -125,6 +125,11 @@ def fast_mtf_encode(data: Union[str, bytes, Sequence[int]],
     else:
         dict_arr = np.ascontiguousarray(dictionary, dtype=np.int32)
 
+    # Il ciclo Numba non controlla i limiti: un simbolo assente dal dizionario
+    # porterebbe il rango a len(dict) e scriverebbe fuori dall'array.
+    if not np.isin(in_arr, dict_arr).all():
+        raise ValueError("l'input contiene simboli assenti dal dizionario MTF")
+
     if _HAS_NUMBA:
         ranks = _numba_mtf_encode(in_arr, dict_arr)
         return ranks.tolist()
@@ -150,7 +155,6 @@ def fast_mtf_decode(ranks: Sequence[int],
         return []
 
     is_str_dict = isinstance(dictionary, str) or (len(dictionary) > 0 and isinstance(dictionary[0], str))
-    ranks_arr = np.ascontiguousarray(ranks, dtype=np.int32)
 
     if is_str_dict:
         dict_arr = np.array([ord(c) for c in dictionary], dtype=np.int32)
@@ -158,6 +162,16 @@ def fast_mtf_decode(ranks: Sequence[int],
         dict_arr = np.frombuffer(dictionary, dtype=np.uint8).astype(np.int32)
     else:
         dict_arr = np.ascontiguousarray(dictionary, dtype=np.int32)
+
+    # I ranghi arrivano da un file non fidato e il ciclo Numba non controlla i
+    # limiti: un rango fuori dal dizionario leggerebbe memoria arbitraria.
+    try:
+        wide = np.asarray(ranks, dtype=np.int64)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("ranghi MTF non validi") from exc
+    if wide.ndim != 1 or wide.min() < 0 or wide.max() >= len(dict_arr):
+        raise ValueError("rango MTF fuori dal dizionario")
+    ranks_arr = np.ascontiguousarray(wide, dtype=np.int32)
 
     if _HAS_NUMBA:
         out_arr = _numba_mtf_decode(ranks_arr, dict_arr)

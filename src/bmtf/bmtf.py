@@ -5,7 +5,11 @@ from typing import List
 
 initialization_vector = "Vettore di inizializzazione"
 
-def secure_encode(input, alphabeth, key, block_size) -> List[int]:
+def secure_encode(input: str | bytes, alphabeth, key, block_size) -> List[int]:
+    if not isinstance(input, (str, bytes)):
+        raise TypeError("input must be str or bytes")
+    if not isinstance(block_size, int) or isinstance(block_size, bool) or block_size <= 0:
+        raise ValueError("block_size must be a positive integer")
     # Divido in blocchi
     block_list = []
     if len(input) > block_size:
@@ -25,7 +29,9 @@ def secure_encode(input, alphabeth, key, block_size) -> List[int]:
 
     return output_list
 
-def secure_decode(input: List[int], alphabeth, key, block_size) -> str:
+def secure_decode(input: List[int], alphabeth, key, block_size, output_bytes=False) -> str | bytes:
+    if not isinstance(block_size, int) or isinstance(block_size, bool) or block_size <= 0:
+        raise ValueError("block_size must be a positive integer")
     
     hash = hashlib.md5(initialization_vector.encode()).hexdigest()
     # Computo la MTF su ogni blocco permutando l'alfabeto
@@ -36,6 +42,8 @@ def secure_decode(input: List[int], alphabeth, key, block_size) -> str:
         output_string.append(output_block)
         hash = hashlib.md5(str(input[i:i+block_size]).encode()).hexdigest() # Bisogna calcolare l'hash sul blocco decodificato (dobbiamo invertire anche questo)
 
+    if output_bytes or (alphabeth and isinstance(alphabeth[0], int)):
+        return b"".join(output_string)
     return "".join(output_string)
 
 if __name__ == "__main__":

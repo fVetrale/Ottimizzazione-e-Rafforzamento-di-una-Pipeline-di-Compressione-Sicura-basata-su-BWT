@@ -13,7 +13,12 @@ def getSecretSort(alfabeto, key):
 
 def getListSecretSort(alfabeto, key):
     return_dict = getSecretSort(alfabeto, key)
-    temp_dict = dict(sorted(return_dict.items(), key=lambda item: item[1])).keys()
+    # getSecretSort adds the legacy ETX sentinel for suffix sorting. A caller
+    # permuting another alphabet must receive exactly that alphabet back.
+    temp_dict = dict(sorted(
+        (item for item in return_dict.items() if item[0] in alfabeto),
+        key=lambda item: item[1],
+    )).keys()
     temp_list = []
     for key in temp_dict:
         temp_list.append(key)

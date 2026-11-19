@@ -46,8 +46,9 @@ Ogni esecuzione crea `results/<etichetta>_<data>/` con:
 ## Come leggere le colonne
 
 - `status`: `ok`, `unsupported` (il codice originale non legge il file, di solito perché non è UTF-8), `error`, `timeout`, `mismatch` (il file decompresso è diverso dall'originale).
-- `compressed_bytes`: **tutto** ciò che serve per decomprimere, cioè il payload (`outputPC.txt`) più i metadati (codec, dizionari, `rfile`, `bfile`, `bFileMTF`).
-  Per questo il rapporto è più basso di quello stampato da `tester.py`, che conta solo il payload.
+- `compressed_bytes`: **tutto** ciò che serve per decomprimere. Nella baseline (fase 0) era il payload (`outputPC.txt`) più i metadati
+  (codec, dizionari, `rfile`, `bfile`, `bFileMTF`); dalla fase 3 è l'unico file `compressed.sbwt`, quindi `metadata_bytes` vale 0
+  e le colonne `sha256_bwt`/`sha256_mtf` restano vuote (non esistono più file intermedi).
 - `*_wall_s`: tempo reale del processo, compreso l'avvio di Python e gli import (circa 0,1–0,2 s). È il valore usato per i MB/s, confrontabile con bzip2.
 - `*_internal_s`: tempo della sola funzione di compressione o decompressione.
 - `*_maxrss_kb`: memoria massima del processo più grande; `*_peak_total_kb`: picco della somma di tutti i processi (conta anche il multiprocessing).
