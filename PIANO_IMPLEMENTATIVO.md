@@ -205,8 +205,13 @@ Da discutere quando si arriva alla fase corrispondente. Ogni decisione presa si 
 |---|---|---|
 | 0 | Versione di Python comune (3.13 o 3.14) | aperta |
 | 0 | Protocollo di misura | aperta |
+<<<<<<< HEAD
 | 1 | Libreria per il suffix array (divsufsort o libsais) | **decisa** |
 | 2 | Libreria Huffman o implementazione nostra | aperta |
+=======
+| 1 | Libreria per il suffix array (divsufsort o libsais) | aperta |
+| 2 | Libreria Huffman o implementazione nostra | **decisa (17/11/2026): Implementazione nostra Canonical Huffman (lunghezze dei codici)** |
+>>>>>>> mattia
 | 3 | Struttura esatta dell'header | aperta |
 | 5 | KDF e parametri | aperta |
 | 5 | Sorgente pseudocasuale per le permutazioni (SHAKE-256 o HMAC) | aperta |
