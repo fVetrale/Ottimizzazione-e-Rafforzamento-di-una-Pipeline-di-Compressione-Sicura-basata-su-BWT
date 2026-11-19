@@ -1,6 +1,6 @@
 from typing import List
 
-def encode(plain_text: str, dictionary) -> List[int]:
+def encode(plain_text: str | bytes, dictionary) -> List[int]:
     dict_list = []
     # Trasformo il dizionario da stringa a lista di caratteri
     if type(dictionary) is str:
@@ -25,7 +25,7 @@ def encode(plain_text: str, dictionary) -> List[int]:
 
     return compressed_text            # Return the encoded text
 
-def decode(compressed_text: List[int], dictionary) -> str:
+def decode(compressed_text: List[int], dictionary) -> str | bytes:
     
     dict_list = []
     # Trasformo il dizionario da stringa a lista di caratteri
@@ -47,6 +47,10 @@ def decode(compressed_text: List[int], dictionary) -> str:
         e = dict_list.pop(rank)
         dict_list.insert(0, e)
 
+    if dict_list and isinstance(dict_list[0], int):
+        if any(not 0 <= symbol <= 255 for symbol in plain_text):
+            raise ValueError("byte alphabet contains a symbol outside [0, 255]")
+        return bytes(plain_text)
     return "".join(plain_text)  # Return original string
 
 
