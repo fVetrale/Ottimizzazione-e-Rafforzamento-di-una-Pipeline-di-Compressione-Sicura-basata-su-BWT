@@ -154,7 +154,8 @@ né mantenere un algoritmo di suffix array proprio.
 In `src/sbwt/suffix.py` la rinomina segreta è diventata una funzione a sé,
 `secretRanks(txt, key)`, e accanto a DC3 c'è ora
 `buildSuffixArrayDivsufsort(txt, key)`, che rinomina e passa i ranghi a divsufsort
-come array `int32`.
+come array `int32`. `pydivsufsort` e `numpy` sono importati dentro questa funzione e
+non in cima al modulo, per non rallentare la decompressione (vedi più avanti).
 
 In `src/sbwt/sbwt.py` la funzione `bwt_from_suffix` ha un nuovo parametro `sa_algo`:
 il valore predefinito è `"divsufsort"`, mentre `"dc3"` resta disponibile per i
@@ -232,8 +233,76 @@ suffix array stesso (0,19 s e 0,66 s contro 0,63 s). Entrambe si possono riscriv
 operazioni vettoriali di NumPy, ma conviene farlo insieme alla fase 3, quando il testo
 diventerà un array di byte e la rinomina si ridurrà a una tabella di 256 valori.
 
+### La prova sulla pipeline completa
+
+Le misure precedenti riguardano solo la sBWT. Per controllare che la pipeline intera
+funzionasse ancora, compressione e decompressione comprese, ho rilanciato lo script
+della fase 0, `benchmarks/run_baseline.py`, sui corpus Canterbury e Calgary con la
+stessa chiave della baseline:
+
+```
+.venv/bin/python benchmarks/run_baseline.py --corpora canterbury,calgary --reps 1 --warmup 0 \
+    --label fase_1_test_prestazioni_suffixarray \
+    --out benchmarks/results/fase_1_test_prestazioni_suffixarray
+```
+
+Lo script lavora su una copia di `src/` in `benchmarks/_work/`, che cancella alla fine,
+e confronta byte per byte ogni file decompresso con l'originale. Su Canterbury prova
+tutti e tre i codificatori (Huffman, aritmetico, LZW), su Calgary solo Huffman. I
+risultati sono in `benchmarks/results/fase_1_test_prestazioni_suffixarray/`.
+
+**Correttezza.** Tutte le 56 prove sono andate a buon fine, senza nessun file
+decompresso diverso dall'originale. Altre 16 prove riguardano file binari
+(`kennedy.xls`, `ptt5`, `sum`, `cp.html`, `obj1`, `obj2`, `geo`, `pic`) e non sono
+partite: la pipeline legge l'input come testo UTF-8 e quei file non lo sono. Fallivano
+allo stesso modo nella baseline, quindi è un limite che c'era già e che la fase 3
+risolverà passando ai byte. In modalità a file intero gli hash di BWT e MTF sono
+identici a quelli della baseline. In modalità a blocchi (`book1`, `book2`) cambiano a
+ogni esecuzione, ma solo perché il parametro `r` viene scelto a caso: succedeva già tra
+le ripetizioni della baseline.
+
+**Un problema trovato: l'import di pydivsufsort in decompressione.** La prima
+esecuzione aveva una decompressione più lenta della baseline di circa 60 ms per file,
+anche se la decompressione non calcola nessun suffix array. Il motivo era che
+`decompression.py` importa `sbwt.sbwt`, che importa `sbwt.suffix`, dove `pydivsufsort`
+e `numpy` erano importati in cima al modulo. Misurato con `python -X importtime`,
+caricarli costa circa 65 ms a ogni processo. Ho spostato i due import dentro
+`buildSuffixArrayDivsufsort`, così vengono caricati solo quando si calcola davvero il
+suffix array. Il tempo di import della decompressione è sceso da 87 ms a 39 ms. La
+compressione non ne risente, perché `sbwt_compress.py` usa comunque `numpy` per conto
+suo. Il test riportato qui sotto è stato rifatto dopo la correzione.
+
+| | Baseline (DC3) | Fase 1, import in cima | Fase 1, import nella funzione |
+|---|---:|---:|---:|
+| Compressione, somma di tutte le prove | 34,4 s | 10,3 s | 10,2 s |
+| Decompressione, somma di tutte le prove | 14,5 s | 16,3 s | 14,2 s |
+
+Alcuni file nel dettaglio (tempi di compressione, Huffman salvo dove indicato):
+
+| File | Dimensione | Baseline | Fase 1 | Più veloce di |
+|---|---:|---:|---:|---:|
+| plrabn12.txt | 482 KB | 3,33 s | 0,39 s | 8,5× |
+| lcet10.txt | 427 KB | 2,32 s | 0,32 s | 7,3× |
+| news.eml | 377 KB | 2,49 s | 0,36 s | 6,9× |
+| book1 (a blocchi) | 769 KB | 1,92 s | 0,44 s | 4,4× |
+| alice29.txt | 152 KB | 0,69 s | 0,19 s | 3,6× |
+| plrabn12.txt, aritmetico | 482 KB | 4,67 s | 1,79 s | 2,6× |
+
+Sull'intera pipeline la compressione è circa 3,4 volte più veloce. Il guadagno è
+minore di quello della sola sBWT perché ora il tempo va soprattutto nelle altre fasi:
+MTF, RLE, codifica entropica e avvio dell'interprete Python. Con il codificatore
+aritmetico il guadagno si ferma intorno a 2,6×, perché è la codifica stessa a essere
+lenta. Sui file di pochi KB i tempi restano intorno a 0,1–0,2 s e sono dominati
+dall'avvio del processo. La decompressione non cambia rispetto alla baseline, come
+deve essere, perché questa fase non la tocca. Ogni file è stato misurato una sola
+volta e senza riscaldamento: sotto il decimo di secondo le singole misure oscillano,
+le somme sono più affidabili.
+
+Questa prova non sostituisce quella finale, che andrà ripetuta dopo la fase 3, quando
+cambierà il formato del file compresso.
+
 ### Cosa resta per chiudere la fase
 
-- Una prova completa della pipeline (compressione e decompressione, anche a blocchi)
-  con il tester, non solo della sBWT isolata.
-- Annotare la scelta di divsufsort tra le decisioni di `PIANO_IMPLEMENTATIVO.md`.
+- La prova finale della pipeline dopo la fase 3, quando cambierà il formato del file
+  compresso.
+- La scelta di divsufsort è annotata tra le decisioni di `PIANO_IMPLEMENTATIVO.md`.

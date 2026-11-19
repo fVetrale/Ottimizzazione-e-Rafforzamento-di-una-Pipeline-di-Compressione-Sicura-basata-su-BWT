@@ -205,7 +205,7 @@ Da discutere quando si arriva alla fase corrispondente. Ogni decisione presa si 
 |---|---|---|
 | 0 | Versione di Python comune (3.13 o 3.14) | aperta |
 | 0 | Protocollo di misura | aperta |
-| 1 | Libreria per il suffix array (divsufsort o libsais) | aperta |
+| 1 | Libreria per il suffix array (divsufsort o libsais) | **decisa** |
 | 2 | Libreria Huffman o implementazione nostra | aperta |
 | 3 | Struttura esatta dell'header | aperta |
 | 5 | KDF e parametri | aperta |

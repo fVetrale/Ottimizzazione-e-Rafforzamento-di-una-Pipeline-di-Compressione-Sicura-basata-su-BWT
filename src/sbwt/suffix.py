@@ -1,6 +1,7 @@
 import sbwt.customSort as customSort
-from pydivsufsort import divsufsort
-import numpy as np
+# pydivsufsort e numpy si importano dentro buildSuffixArrayDivsufsort:
+# la decompressione importa questo modulo ma non calcola suffix array,
+# e caricarli in cima costava circa 65 ms a ogni processo.
 # Python3 program for building suffix
 # array of a given text
 
@@ -158,7 +159,9 @@ def buildSuffixArrayDivsufsort(txt: str | list, key):
 	Suffix array con ordinamento segreto calcolato da divsufsort (libreria C).
 	Stesso risultato di buildSuffixArrayDC3 a parità di chiave.
 	"""
-	
+	from pydivsufsort import divsufsort
+	import numpy as np
+
 	s, _ = secretRanks(txt, key)
 	return divsufsort(np.asarray(s, dtype=np.int32)).tolist()
 
