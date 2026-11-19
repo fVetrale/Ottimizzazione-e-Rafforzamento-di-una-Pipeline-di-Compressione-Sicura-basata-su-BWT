@@ -23,7 +23,7 @@ if __name__ == "__main__":
 	equals = filecmp.cmp(original_file_path, decompressed_file_path, False)
 
 	orig = os.path.getsize(original_file_path)
-	comp = os.path.getsize("TestFiles/Output/outputPC.txt")
+	comp = os.path.getsize(compression.COMPRESSED_PATH)  # unico file prodotto (fase 3)
 
 	ratio = orig / comp
 	percent = (1.0 - (comp / orig)) * 100

@@ -306,3 +306,271 @@ cambierà il formato del file compresso.
 - La prova finale della pipeline dopo la fase 3, quando cambierà il formato del file
   compresso.
 - La scelta di divsufsort è annotata tra le decisioni di `PIANO_IMPLEMENTATIVO.md`.
+
+---
+
+## Fase 3 — Pipeline a byte e formato binario
+
+*19 novembre 2026 — branch `fase3-pipeline`*
+
+### Da dove siamo partiti
+
+La fase 3 era assegnata a Sebastiano e la fase 2 a Mattia. Il 19 novembre i loro
+lavori sono stati riuniti: `filippo` e `mattia` nel branch `integrazione`, e
+`integrazione` dentro `sebastiano`. Il conflitto in `src/bmtf/mtf.py` si è risolto
+tenendo la MTF compilata con Numba di Mattia, ma facendole restituire `bytes` quando
+l'alfabeto è fatto di interi, come serve alla bMTF a byte di Sebastiano.
+
+Analizzando il risultato, i pezzi c'erano ed erano corretti: il contenitore binario
+(`container_format.py`), la BWT sui byte con l'indice primario al posto della
+sentinella (`bwt_bytes`), la bMTF sui byte, la Zero-RLE e l'Huffman canonico di Mattia.
+Mancava però proprio la fase 3: il programma vero (`sbwt_compress.py` e
+`decompression.py`) era identico a quello di partenza. Leggeva il file come testo,
+quindi falliva su ogni file binario; aggiungeva la sentinella `\003`; scriveva nove
+file intermedi con i dati in chiaro in `TestFiles/Output/`; salvava la codifica con
+`pickle`, che esegue codice quando si apre un file manipolato. Mettendo in fila i
+moduli a mano si vedeva anche un problema di prestazioni serio nell'Huffman.
+
+Abbiamo deciso di completare la fase noi, su un branch nuovo (`fase3-pipeline`, nato da
+`sebastiano`), in quattro punti: la pipeline vera (1), il bug di Huffman (2), la
+validazione in decompressione (3) e le decisioni sul formato (4, in parte).
+
+### Le decisioni prese prima di scrivere codice
+
+- **Solo Huffman.** La pipeline originale aveva anche il codificatore aritmetico
+  (modo 1) e LZW (modo 2). Nella nuova pipeline esiste solo il modo 0; gli altri
+  danno un errore esplicito. Il motivo, con le misure della baseline, è in
+  [`fase3-codificatori-aritmetico-lzw.md`](fase3-codificatori-aritmetico-lzw.md): LZW
+  comprime peggio di Huffman su tutti i file, l'aritmetico guadagna circa il 2% ma
+  decomprime da 8 a 10 volte più lentamente.
+- **Alfabeto fisso 0–255 per la bMTF.** Il decoder deve conoscere l'alfabeto prima di
+  decodificare. Invece di salvarlo nel file, la bMTF parte sempre da tutti i 256 byte
+  permutati dalla chiave: non c'è niente da salvare e il file compresso non rivela
+  quali valori di byte compaiono nell'originale.
+- **Versioni MPI non toccate.** `compression_mpi.py` e `decompression_mpi.py` restano
+  la pipeline testuale originale; convertirle è un lavoro a parte.
+- **Commit fatti da me**, sul branch `fase3-pipeline`.
+
+### Il contenitore
+
+Il formato di Sebastiano era una buona base: magic, versione, campi a dimensione
+fissa in big endian, spazio per nonce e tag di autenticazione (fase 5). Per farci
+stare la pipeline sono servite tre modifiche.
+
+**Il numero di simboli Huffman è entrato nell'header** (`symbol_count`). Il decoder
+deve sapere quando fermarsi, perché l'ultimo byte del flusso contiene bit di
+riempimento. Prima Mattia lo scriveva in testa al proprio payload, cioè fuori da ogni
+controllo; ora la tabella sta nel suo campo e il payload è solo il flusso di bit.
+
+**È sparito un campo doppio.** `primary_count` valeva sempre quanto `block_count`: un
+campo che ripete un altro serve solo a creare incoerenze.
+
+**I campi si controllano a vicenda.** Un singolo campo può avere un valore plausibile
+e insieme essere incoerente con gli altri. Ora il numero di blocchi deve essere
+esattamente ⌈dimensione originale / dimensione del blocco⌉; ogni indice primario
+deve stare dentro il *proprio* blocco (l'ultimo è più corto, e prima il controllo
+usava sempre la dimensione piena); il numero di simboli deve stare tra 1 e la
+dimensione originale, perché la Zero-RLE non produce mai più simboli dell'input; un
+input vuoto non può portare dati. Tutti questi controlli sono in una sola funzione,
+`validate()`, chiamata sia in scrittura sia in lettura: ciò che `serialize` produce,
+`parse` lo accetta sempre. Le lunghezze dichiarate vengono confrontate con la
+dimensione reale del file prima di leggere le sezioni, così un header falsificato non
+può far allocare memoria o ciclare il parser.
+
+### La pipeline in memoria: `src/pipeline.py`
+
+È il cuore della fase. Due funzioni, senza file e senza stampe:
+
+```
+compress_bytes(dati, chiave)   -> un unico blocco di byte (il contenitore)
+decompress_bytes(blob, chiave) -> i byte originali
+```
+
+La compressione divide i dati in blocchi, calcola la sBWT di ogni blocco con
+`bwt_bytes` (che usa divsufsort, il lavoro della fase 1) e salva un indice primario
+per blocco; poi applica la bMTF a tutto l'output, la Zero-RLE e l'Huffman canonico, e
+mette tutto nel contenitore. La decompressione valida il contenitore e fa il
+percorso inverso.
+
+Per ogni compressione si estrae un **nonce casuale** di 16 byte, salvato in chiaro
+nell'header, e le trasformazioni usano come chiave `nonce + chiave`. Lo stesso file
+compresso due volte con la stessa chiave dà due risultati diversi. Il nonce prende il
+posto del numero casuale `r` che la pipeline originale scriveva in `rfile.txt`, e
+prepara la fase 5, dove servirà alla derivazione delle chiavi.
+
+Separare la logica dalla lettura e scrittura dei file non è solo ordine: permette di
+testare la pipeline direttamente, senza passare dal disco.
+
+### Gli involucri e il benchmark
+
+`sbwt_compress.py` e `decompression.py` sono diventati due involucri sottili attorno
+a `pipeline.py`. Le funzioni `compressione()` e `decompressione()` hanno la stessa
+firma di prima, quindi `tester.py` e `benchmarks/_driver.py` le chiamano come sempre.
+L'unico file scritto in compressione è `TestFiles/Output/compressed.sbwt`; in
+decompressione `decompressed.txt` (nome storico, contenuto binario). La scrittura passa
+da un file temporaneo rinominato alla fine, così un errore non lascia mai un file a
+metà. I tempi di ogni stadio vengono stampati nel formato della pipeline originale
+(`... -> elapsed time of sBWT`), perché il benchmark li legge e li confronta con la
+baseline.
+
+`benchmarks/run_baseline.py` ora conta un payload unico senza metadati e, soprattutto,
+**segna come errore la prova se dopo la compressione in `Output` compare qualunque
+altro file**. L'assenza di file intermedi non è più una promessa: viene verificata a
+ogni esecuzione.
+
+### Tre problemi trovati strada facendo
+
+**L'Huffman era quadratico.** Nel `BitWriter` di Mattia l'accumulatore dei bit non
+veniva mai svuotato: dopo aver emesso un byte, i bit già scritti restavano lì, e
+l'accumulatore cresceva fino a contenere l'intero flusso. Ogni scrittura faceva uno
+shift su un intero sempre più grande, quindi il tempo cresceva col quadrato dei
+simboli: 0,8 s per 100.000 simboli, 45 s per 800.000. Su book1 l'Huffman impiegava
+13,4 s, contro 0,4 s di tutto il resto. È bastata una riga che tiene solo i bit non
+ancora emessi; ora book1 richiede 0,08 s, circa 170 volte meno, e il formato prodotto
+è identico. Due test controllano che l'accumulatore resti sotto gli 8 bit e che
+l'output coincida bit per bit con una versione di riferimento.
+
+**I processi in parallelo si bloccavano.** I blocchi della sBWT sono elaborati in
+processi separati. Su Linux Python li crea di default con `fork`, cioè copiando il
+processo principale. Ma a quel punto numpy e pydivsufsort hanno già avviato dei
+thread: se uno di questi tiene un lock nel momento della copia, il processo figlio lo
+eredita bloccato e resta fermo per sempre. Lo segnala Python stesso (*"This process is
+multi-threaded, use of fork() may lead to deadlocks in the child"*), e nei test
+succedeva davvero. I processi ora partono con `spawn`, cioè da zero, che è anche l'unico
+modo disponibile su Windows: la pipeline si comporta allo stesso modo su tutte le
+macchine del gruppo. L'unica conseguenza è che chi la usa da uno script deve avere la
+solita guardia `if __name__ == "__main__":`.
+
+**Il parallelismo costava più di quanto rendeva.** La politica dei blocchi veniva dalla
+fase 0: un blocco per core, tra 256 KB e 2 MB. Aveva senso con DC3, lentissimo. Con
+divsufsort un blocco da 256 KB si trasforma in circa 0,1 s, meno del tempo necessario
+ad avviare i processi (circa 0,15 s, perché ognuno deve reimportare numpy e
+pydivsufsort). Su book1: sBWT 0,28 s con un processo, 0,30 s in parallelo; BWT inversa
+0,12 s contro 0,26 s. In più i blocchi piccoli comprimono peggio i testi. Ora i blocchi
+sono fissi da 900 KB, come in bzip2 -9, e il parallelismo scatta solo da 4 MB in su.
+Su book1 il rapporto è passato da 0,352 a 0,328 e la compressione da 0,69 a 0,51 s.
+C'è un caso in cui il blocco grande comprime un po' peggio, kennedy.xls (da 0,202 a
+0,217): su dati eterogenei un blocco piccolo si adatta meglio. Abbiamo accettato il
+compromesso, a favore dei testi e della velocità.
+
+### La validazione in decompressione
+
+Il file compresso arriva da fuori, quindi può essere troncato o manipolato. La regola
+che ci siamo dati: un file non valido deve essere **rifiutato con un errore di
+formato**, mai far crollare il programma con un'altra eccezione, mai bloccarlo, mai
+fargli leggere fuori da un array o allocare memoria senza limite.
+
+| Stadio | Cosa si controlla | Contro cosa protegge |
+|---|---|---|
+| Contenitore | struttura, lunghezze, coerenza tra i campi | file troncati, allungati o con campi incoerenti |
+| Tabella Huffman | simboli ammessi, lunghezze tra 1 e 64, disuguaglianza di Kraft con uguaglianza esatta, nessun duplicato | tabelle che darebbero codici sovrapposti o incompleti |
+| Flusso Huffman | bit sufficienti, nessun byte in eccesso, riempimento a zero | payload troncato o allungato |
+| Zero-RLE | limite sulla lunghezza controllato *prima* di allocare gli zeri, simboli ammessi | "decompression bomb": 60 simboli RUNB chiederebbero circa 2⁶¹ zeri |
+| MTF (Numba) | ranghi dentro il dizionario | letture fuori dall'array: il ciclo compilato non controlla i limiti |
+| bMTF | blocco non più piccolo di 10 KB | file che renderebbero la decompressione lentissima |
+
+La condizione di Kraft merita due parole. Un codice di Huffman è sempre *completo*: la
+somma di 2⁻ˡ su tutte le lunghezze l vale esattamente 1. Se la somma supera 1, i codici
+canonici ricostruiti dal decoder si sovrappongono; se è minore di 1, restano sequenze di
+bit che non corrispondono a nessun simbolo. Una tabella manipolata quasi sempre viola
+questa uguaglianza, e la si scarta prima di costruire l'albero.
+
+Infine `pipeline.py` trasforma qualunque errore di decodifica in `ContainerFormatError`:
+chi usa la pipeline deve gestire un solo tipo di errore.
+
+Scrivendo i test è emerso un altro bug nell'Huffman: con un solo simbolo il caso
+speciale non scattava mai (il codice `0` crea un ramo nell'albero, quindi la radice
+non è mai una foglia), e un bit corrotto portava a un `AttributeError` invece che a un
+errore di formato. Ora il caso si riconosce dalla tabella, e ogni discesa verso un ramo
+inesistente è un errore di formato.
+
+Per misurare la validazione abbiamo invertito, uno alla volta, ogni byte di un file
+compresso (553 byte) e provato a decomprimerlo:
+
+| Zona | Byte | Rifiutati | Output diverso | Output identico |
+|---|---|---|---|---|
+| Header | 54 | 46 | 0 | 8 |
+| Nonce | 16 | 0 | 16 | 0 |
+| Indici primari | 4 | 3 | 1 | 0 |
+| Tabella Huffman | 89 | 88 | 1 | 0 |
+| Payload | 390 | 311 | 79 | 0 |
+| **Totale** | 553 | **448 (81%)** | 97 | 8 |
+
+Nessuna alterazione ha causato altre eccezioni o blocchi. Gli 8 byte dell'header con
+output identico sono le due dimensioni di blocco: il file di prova sta comunque in un
+blocco solo. Le alterazioni del nonce e una parte di quelle del payload producono dati
+validi ma diversi, e senza un'autenticazione non si possono riconoscere per
+costruzione. Allo stesso modo un header falsificato può dichiarare una dimensione
+originale enorme: per questo `decompress_bytes` accetta un limite `max_output_size`.
+Entrambi i punti si chiudono con il tag di autenticazione della fase 5, per cui il
+formato ha già lo spazio.
+
+### Le misure
+
+Benchmark ufficiale con `run_baseline.py` su Canterbury e Calgary, tre ripetizioni più
+una di riscaldamento, come la baseline. I risultati sono in
+`benchmarks/results/fase_3_validazione/` (la prova con la vecchia politica dei
+blocchi da 256 KB è in `fase_3_pipeline_byte/`). Il rapporto è la
+dimensione compressa divisa per l'originale.
+
+**File supportati: 25 su 25**, contro 17 della baseline. Gli otto binari (obj1, geo,
+obj2, pic, cp.html, sum, ptt5, kennedy.xls) prima fallivano con `UnicodeDecodeError`.
+
+Sui 17 file di testo che anche la baseline gestiva:
+
+| | Fase 0 | Fase 1 | **Fase 3** | bzip2 -9 |
+|---|---|---|---|---|
+| Byte compressi | 1.743.298 | ≈ fase 0 | **1.063.790 (−39%)** | 976.577 |
+| Compressione (somma) | 15,91 s | 3,76 s | **3,95 s** | |
+| Decompressione (somma) | 3,22 s | 3,29 s | **4,11 s** | |
+
+Alcuni file:
+
+| File | Fase 0 | Fase 3 | bzip2 |
+|---|---|---|---|
+| alice29.txt | 0,501 | 0,310 | 0,284 |
+| book1 | 0,565 | 0,328 | 0,303 |
+| lcet10.txt | 0,448 | 0,275 | 0,252 |
+| pic (binario) | — | 0,111 | 0,097 |
+| kennedy.xls (binario) | — | 0,217 | 0,127 |
+
+Il rapporto migliora del 39%, che era l'obiettivo della fase 2 nel piano; restiamo
+circa il 9% sopra bzip2. La compressione è praticamente alla pari con la fase 1, ma
+ora gestisce i binari, non lascia file intermedi, non usa `pickle` e produce un
+formato validato. La validazione costa poco: circa il 6% sul tempo interno di
+decompressione.
+
+La decompressione è circa 0,8 s più lenta della fase 1 sui 17 file. Due le cause:
+l'import di numpy, richiesto dalla MTF con Numba (60–85 ms per processo, che sui file
+piccoli pesano: xargs.1 passa da 0,05 a 0,13 s), e la BWT inversa e la decodifica
+Huffman bit per bit, ancora in Python puro. Il secondo punto è esattamente il lavoro
+della fase 4.
+
+### Le verifiche
+
+La suite di test conta ora 72 test, tutti superati:
+
+| File | Test | Cosa verifica |
+|---|---|---|
+| `test_container_format.py` | 12 | round-trip, contenitori non validi, ogni troncamento, ogni byte dell'header |
+| `test_pipeline.py` | 15 | round-trip su casi limite, binari e alice29, più blocchi in serie e in parallelo, nonce, chiave sbagliata, nessun file scritto, politica dei blocchi |
+| `test_file_wrappers.py` | 3 | file binario con un solo file prodotto, file malformato senza output lasciato, modi non supportati |
+| `test_decoder_hardening.py` | 19 | ogni controllo della validazione, file falsificati, manomissione di ogni byte e 300 corruzioni casuali |
+| `test_symbol_huffman.py` | 9 | i 7 test di Mattia più 2 sul `BitWriter` |
+| `test_fast_mtf.py`, `test_zero_rle.py`, `test_sbwt_bytes.py` | 14 | i test di Mattia e Sebastiano, invariati |
+
+### Cosa resta
+
+- **Formato (punto 4).** L'ordine dei byte non è uniforme: il contenitore è big endian,
+  la tabella Huffman little endian. Conviene riservare un campo che identifichi il
+  codificatore (per esempio nel byte `flags`), prima che la fase 5 renda più costoso
+  cambiare il formato. La riga "Struttura esatta dell'header" del piano va chiusa.
+- **Numba (punto 5).** Non è installato nel `.venv`: tutte le misure usano la versione
+  in Python puro della MTF. Vanno ripetuti test e benchmark con
+  `pip install -r requirements.txt`.
+- **Fase 4.** La decompressione: BWT inversa e decodifica Huffman veloci.
+- **Fase 5.** Derivazione delle chiavi dal nonce e tag di autenticazione, che chiudono
+  i due rischi residui della validazione.
+- **MPI.** Le versioni MPI usano ancora la pipeline testuale.
+- **Integrazione.** Il branch `fase3-pipeline` va committato e riportato in
+  `integrazione`.

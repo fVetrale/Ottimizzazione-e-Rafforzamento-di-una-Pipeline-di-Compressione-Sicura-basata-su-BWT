@@ -13,7 +13,8 @@ from pc.symbol_huffman import (
     serialize_code_lengths,
     deserialize_code_lengths,
     huffman_compress_to_bytes,
-    huffman_decompress_from_bytes
+    huffman_decompress_from_bytes,
+    BitWriter,
 )
 from rle.zero_rle import zero_rle_encode, zero_rle_decode
 
@@ -96,6 +97,33 @@ class TestSymbolHuffman(unittest.TestCase):
         # Verifica compressione: i byte del payload devono essere molto inferiori a len(raw_mtf)
         compression_ratio = len(huffman_payload) / len(raw_mtf)
         self.assertLess(compression_ratio, 0.35, f"Rapporto {compression_ratio:.3f} troppo alto")
+
+    def test_bit_writer_accumulator_stays_bounded(self):
+        # L'accumulatore deve contenere solo i bit non ancora emessi (< 8):
+        # se crescesse con lo stream la codifica diventerebbe quadratica.
+        writer = BitWriter()
+        for i in range(50_000):
+            writer.write_bits(i % 32, 5 + i % 13)
+            self.assertLess(writer.bits_in_accum, 8)
+            self.assertLess(writer.bit_accum.bit_length(), 8)
+        data, total_bits = writer.flush()
+        self.assertEqual(len(data), -(-total_bits // 8))
+
+    def test_bit_writer_matches_reference_bitstring(self):
+        rng = np.random.default_rng(5)
+        writer = BitWriter()
+        reference = []
+        for _ in range(5000):
+            length = int(rng.integers(1, 20))
+            code = int(rng.integers(0, 1 << length))
+            writer.write_bits(code, length)
+            reference.append(format(code, f"0{length}b"))
+        data, total_bits = writer.flush()
+        bits = "".join(reference)
+        self.assertEqual(total_bits, len(bits))
+        bits += "0" * (-len(bits) % 8)
+        expected = bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
+        self.assertEqual(data, expected)
 
 
 if __name__ == "__main__":

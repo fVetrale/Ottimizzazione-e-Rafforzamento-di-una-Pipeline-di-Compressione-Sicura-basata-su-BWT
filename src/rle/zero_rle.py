@@ -26,7 +26,7 @@ la rappresentazione binaria biiettiva (1-based) con i simboli RUNA e RUNB.
       v = k -> k + 1
 """
 
-from typing import List, Sequence, Union
+from typing import List, Optional, Sequence, Union
 import numpy as np
 
 RUNA = 0
@@ -73,23 +73,34 @@ def zero_rle_encode(data: Union[Sequence[int], np.ndarray]) -> List[int]:
     return output
 
 
-def zero_rle_decode(encoded: Union[Sequence[int], np.ndarray]) -> List[int]:
+def zero_rle_decode(encoded: Union[Sequence[int], np.ndarray],
+                    max_output: Optional[int] = None,
+                    max_symbol: Optional[int] = None) -> List[int]:
     """
     Decodifica una sequenza di simboli interi prodotti da zero_rle_encode,
     ricostruendo l'esatta sequenza originale di interi MTF.
-    
+
     Args:
         encoded: Sequenza o array di simboli interi (RUNA=0, RUNB=1, valori >= 2).
-        
+        max_output: se indicato, numero massimo di valori da produrre. Pochi
+            simboli RUNB bastano a chiedere miliardi di zeri ("decompression
+            bomb"): il limite viene controllato prima di allocare la sequenza.
+        max_symbol: se indicato, valore massimo ammesso per un simbolo.
+
     Returns:
         Lista originale di interi MTF.
+
+    Raises:
+        ValueError: simbolo negativo o oltre max_symbol, oppure output oltre max_output.
     """
     output: List[int] = []
     i = 0
     n = len(encoded)
 
     while i < n:
-        sym = encoded[i]
+        sym = int(encoded[i])
+        if sym < 0 or (max_symbol is not None and sym > max_symbol):
+            raise ValueError(f"simbolo Zero-RLE non valido: {sym}")
         if sym == RUNA or sym == RUNB:
             run_length = 0
             multiplier = 1
@@ -100,9 +111,13 @@ def zero_rle_decode(encoded: Union[Sequence[int], np.ndarray]) -> List[int]:
                     run_length += 2 * multiplier
                 multiplier *= 2
                 i += 1
+                if max_output is not None and len(output) + run_length > max_output:
+                    raise ValueError("la sequenza di zeri supera la lunghezza dichiarata")
             output.extend([0] * run_length)
         else:
-            output.append(int(sym) - 1)
+            if max_output is not None and len(output) >= max_output:
+                raise ValueError("la sequenza decodificata supera la lunghezza dichiarata")
+            output.append(sym - 1)
             i += 1
 
     return output
