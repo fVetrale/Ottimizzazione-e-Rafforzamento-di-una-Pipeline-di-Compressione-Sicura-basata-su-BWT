@@ -1,0 +1,74 @@
+{
+  "data": "2026-11-17T12:46:15",
+  "etichetta": "fase1_sbwt",
+  "git_commit": "1bf2d9d61305f349994f12f2c0019958f67a9e43",
+  "git_modifiche_locali": "M src/sbwt/sbwt.py\n M src/sbwt/suffix.py\n?? benchmarks/results/fase1_sbwt_20261117_1246/\n?? docs/filippo/REPORT.md\n?? tests/",
+  "python": "3.13.13",
+  "librerie": {
+    "pydivsufsort": "0.0.20",
+    "numpy": "2.3.5"
+  },
+  "sistema": "Linux-6.17.0-1032-oem-x86_64-with-glibc2.43",
+  "cpu": "AMD Ryzen AI 5 PRO 340 w/ Radeon 840M",
+  "core_logici": 12,
+  "chiave": "chiave-benchmark-fase1",
+  "parametri": {
+    "worker": null,
+    "corpora": "canterbury,calgary,large,silesia",
+    "files": "",
+    "algos": "dc3,divsufsort",
+    "reps": 3,
+    "warmup": 1,
+    "dc3_max_mb": 5.0,
+    "doubling_max_kb": 200.0,
+    "timeout": 1800,
+    "label": "fase1_sbwt",
+    "out": ""
+  },
+  "file": {
+    "canterbury": [
+      "grammar.lsp",
+      "xargs.1",
+      "fields.c",
+      "cp.html",
+      "sum",
+      "asyoulik.txt",
+      "alice29.txt",
+      "lcet10.txt",
+      "plrabn12.txt",
+      "ptt5",
+      "kennedy.xls"
+    ],
+    "calgary": [
+      "obj1",
+      "progc",
+      "progp",
+      "paper1",
+      "progl.txt",
+      "paper2",
+      "trans",
+      "geo",
+      "bib",
+      "obj2",
+      "news.eml",
+      "pic",
+      "book2",
+      "book1"
+    ],
+    "large": [
+      "world192.txt",
+      "bible.txt",
+      "E.coli"
+    ],
+    "silesia": [
+      "xml.tar",
+      "ooffice",
+      "reymont.pdf",
+      "sao",
+      "x-ray",
+      "mr",
+      "osdb",
+      "dickens"
+    ]
+  }
+}

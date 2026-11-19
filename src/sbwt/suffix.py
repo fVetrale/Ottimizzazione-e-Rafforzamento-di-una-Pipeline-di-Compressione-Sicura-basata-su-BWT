@@ -1,4 +1,7 @@
 import sbwt.customSort as customSort
+# pydivsufsort e numpy si importano dentro buildSuffixArrayDivsufsort:
+# la decompressione importa questo modulo ma non calcola suffix array,
+# e caricarli in cima costava circa 65 ms a ogni processo.
 # Python3 program for building suffix
 # array of a given text
 
@@ -137,6 +140,31 @@ def printArr(arr, n):
               ma rispetta la gerarchia imposta dalla 'key'.
  -----------------------------------------------------------------------------
 '''
+def secretRanks(txt: str | list, key):
+	"""
+	Rinomina segreta: sostituisce ogni carattere con il suo rango (1..K)
+	nell'ordine segreto derivato da 'key'. Dopo la rinomina, l'ordine numerico
+	normale coincide con l'ordine segreto, quindi qualsiasi algoritmo standard
+	di suffix array (DC3, divsufsort, ...) produce il suffix array segreto.
+	Restituisce (lista di ranghi, K).
+	"""
+	alfabeto = sorted(set(txt))
+	remap_dict_floats = customSort.getSecretSort(alfabeto, key)
+	alfabeto_ordinato_segreto = sorted(alfabeto, key=lambda c: remap_dict_floats[c])
+	rank_dict = {char: i + 1 for i, char in enumerate(alfabeto_ordinato_segreto)}
+	return [rank_dict[c] for c in txt], len(alfabeto)
+
+def buildSuffixArrayDivsufsort(txt: str | list, key):
+	"""
+	Suffix array con ordinamento segreto calcolato da divsufsort (libreria C).
+	Stesso risultato di buildSuffixArrayDC3 a parità di chiave.
+	"""
+	from pydivsufsort import divsufsort
+	import numpy as np
+
+	s, _ = secretRanks(txt, key)
+	return divsufsort(np.asarray(s, dtype=np.int32)).tolist()
+
 def buildSuffixArrayDC3(txt:str | list, key):
 	# 1. Recupero l'alfabeto (caratteri unici)
 	alfabeto = sorted(set(txt))

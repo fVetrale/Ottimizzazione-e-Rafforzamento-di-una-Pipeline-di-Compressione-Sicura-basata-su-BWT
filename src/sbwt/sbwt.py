@@ -1,16 +1,22 @@
 import sbwt.suffix as suffix
 import sbwt.customSort as customSort
-#from pydivsufsort import divsufsort
 
 # versione non efficiente del calcolo dell'array dei suffissi (non viene più usata)
-def suffix_array(string): 
+def suffix_array(string):
     return(list(sorted(range(len(string)), key=lambda i:string[i:])))
 
+# Algoritmi disponibili per il suffix array con ordinamento segreto.
+# "divsufsort" (libreria C, default) e "dc3" (Python, tenuto per confronto)
+# danno lo stesso risultato a parità di chiave.
+SA_BUILDERS = {
+    "divsufsort": suffix.buildSuffixArrayDivsufsort,
+    "dc3": suffix.buildSuffixArrayDC3,
+}
+
 # versione della BWT che utilizza gli array dei suffissi
-def bwt_from_suffix(string, key, s_array=None):
+def bwt_from_suffix(string, key, s_array=None, sa_algo="divsufsort"):
     if s_array is None:
-        #s_array = divsufsort(string)
-        s_array = suffix.buildSuffixArrayDC3(string, key)
+        s_array = SA_BUILDERS[sa_algo](string, key)
     
 	# Costruisco la BWT usando l'array dei suffissi
     # string[idx-1] corrisponde a un carattere dell'ultima colonna della matrice delle rotazioni della BWT
