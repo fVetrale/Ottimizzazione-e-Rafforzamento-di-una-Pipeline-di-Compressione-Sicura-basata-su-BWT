@@ -241,10 +241,52 @@ def huffman_encode_symbols(symbols: Union[Sequence[int], np.ndarray]) -> Tuple[b
     return encoded_bytes, code_lengths, num_symbols
 
 
+def _build_lookup_table(canonical_codes: Dict[int, Tuple[int, int]],
+                        table_bits: int) -> List[Optional[Tuple[int, int]]]:
+    """Costruisce una tabella di lookup per la decodifica veloce.
+
+    Per ogni possibile combinazione di ``table_bits`` bit, memorizza
+    ``(simbolo, lunghezza_codice)`` se il codice di quel simbolo è lungo al
+    più ``table_bits``.  Un codice corto viene replicato in tutte le voci che
+    condividono il suo prefisso: se il codice è lungo *l*, occupa
+    2^(table_bits − l) voci consecutive.
+
+    Le voci per le quali nessun codice di lunghezza ≤ table_bits è prefisso
+    restano ``None``: dovranno passare dalla via lenta (albero).
+    """
+    size = 1 << table_bits
+    table: List[Optional[Tuple[int, int]]] = [None] * size
+    for sym, (code, length) in canonical_codes.items():
+        if length <= table_bits:
+            # I bit alti del codice sono seguiti da (table_bits - length) bit
+            # arbitrari: riempiamo tutte le combinazioni.
+            padding = table_bits - length
+            base = code << padding
+            for suffix in range(1 << padding):
+                table[base | suffix] = (sym, length)
+    return table
+
+
+def _choose_table_bits(code_lengths: Dict[int, int], num_symbols: int) -> int:
+    """Sceglie L (ampiezza della tabella) in base ai dati.
+
+    Regola empirica: L = min(max_len_effettiva, 10), ma se il file è piccolo
+    (< 2048 simboli) si scende a min(..., 8) per non pagare il costo della
+    tabella più del guadagno sulla decodifica.
+    """
+    max_len = max(code_lengths.values())
+    if num_symbols < 2048:
+        return min(max_len, 8)
+    return min(max_len, 10)
+
+
 def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbols: int,
                            max_symbol: Optional[int] = None) -> List[int]:
     """
     Decodifica un flusso di byte in simboli interi usando le lunghezze canoniche.
+
+    Usa una tabella di lookup di 2^L voci per risolvere i codici che stanno in
+    L bit con un solo accesso; i codici più lunghi passano dall'albero binario.
 
     Args:
         data: Flusso di byte compressi.
@@ -272,12 +314,6 @@ def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbol
     if num_symbols > len(data) * 8:
         raise ValueError("il flusso di bit è troppo corto per il numero di simboli dichiarato")
 
-    canonical_codes = build_canonical_codes_from_lengths(code_lengths)
-    root = build_decode_tree(canonical_codes)
-
-    reader = BitReader(data)
-    output: List[int] = []
-
     # Caso speciale con un solo simbolo unico: l'encoder scrive un bit 0 per simbolo.
     # (Il codice (0, 1) crea un ramo sinistro, quindi la radice non è mai una
     # foglia: il caso si riconosce dalla tabella, non dalla forma dell'albero.)
@@ -287,25 +323,114 @@ def huffman_decode_symbols(data: bytes, code_lengths: Dict[int, int], num_symbol
         sym = next(iter(code_lengths))
         return [sym] * num_symbols
 
-    curr = root
-    for _ in range(num_symbols):
+    canonical_codes = build_canonical_codes_from_lengths(code_lengths)
+
+    # --- Tabella di lookup + fallback ad albero per codici lunghi -----------
+    table_bits = _choose_table_bits(code_lengths, num_symbols)
+    table = _build_lookup_table(canonical_codes, table_bits)
+
+    # L'albero serve solo se qualche codice è più lungo di table_bits.
+    max_len = max(code_lengths.values())
+    need_tree = max_len > table_bits
+    if need_tree:
+        root = build_decode_tree(canonical_codes)
+
+    # --- Accumulatore di bit a blocchi --------------------------------------
+    # Legge molti byte alla volta per ridurre l'overhead Python per bit.
+    total_bits = len(data) * 8
+    bit_accum = 0
+    bits_in_accum = 0
+    byte_pos = 0
+    data_len = len(data)
+
+    output: List[int] = [0] * num_symbols  # pre-allocazione
+    table_mask = (1 << table_bits) - 1
+    bits_consumed = 0  # bit effettivamente consumati (codici decodificati)
+
+    for i in range(num_symbols):
+        # Riempimento dell'accumulatore: portiamo almeno table_bits bit (o
+        # max_len se servono) pronti.  Leggiamo fino a 8 byte alla volta.
+        needed = max_len if need_tree else table_bits
+        while bits_in_accum < needed and byte_pos < data_len:
+            # Carica fino a 8 byte alla volta nell'accumulatore.
+            can_load = min(8, data_len - byte_pos)
+            for _ in range(can_load):
+                bit_accum = (bit_accum << 8) | data[byte_pos]
+                byte_pos += 1
+                bits_in_accum += 8
+
+        # Bit realmente rimasti nel flusso (non padding).
+        bits_remaining = total_bits - bits_consumed
+
+        if bits_in_accum < 1:
+            raise ValueError("Flusso di bit terminato inaspettatamente prima di completare i simboli.")
+
+        # Tentativo veloce con la tabella di lookup.
+        # Se l'accumulatore ha meno di table_bits bit, paddiamo con zeri a
+        # destra: il codice canonico corretto è comunque un prefisso di ciò
+        # che leggiamo, e il padding zero non crea ambiguità purché si
+        # verifichi che la lunghezza del codice trovato non superi i bit
+        # realmente rimasti.
+        if bits_in_accum >= table_bits:
+            peek = (bit_accum >> (bits_in_accum - table_bits)) & table_mask
+        elif bits_in_accum > 0:
+            peek = ((bit_accum & ((1 << bits_in_accum) - 1))
+                    << (table_bits - bits_in_accum)) & table_mask
+        else:
+            peek = -1  # nessun bit: forza il fallback
+
+        if peek >= 0:
+            entry = table[peek]
+            if entry is not None:
+                sym, length = entry
+                # Controllo: il codice non deve essere più lungo dei bit
+                # realmente rimasti (escludendo il padding finale).
+                if length > bits_remaining:
+                    raise ValueError("Flusso di bit terminato inaspettatamente prima di completare i simboli.")
+                bits_in_accum -= length
+                bit_accum &= (1 << bits_in_accum) - 1
+                bits_consumed += length
+                output[i] = sym
+                continue
+
+        # Via lenta: percorso bit per bit lungo l'albero, per codici > table_bits.
+        if not need_tree:
+            # Non dovrebbe mai succedere con una tabella valida e codici
+            # non più lunghi di table_bits.
+            raise ValueError("sequenza di bit che non corrisponde a nessun codice")
+
+        curr = root
+        code_bits_used = 0
         while curr.symbol is None:
-            bit = reader.read_bit()
+            if bits_in_accum < 1:
+                raise ValueError("Flusso di bit terminato inaspettatamente prima di completare i simboli.")
+            if bits_consumed + code_bits_used >= total_bits:
+                raise ValueError("Flusso di bit terminato inaspettatamente prima di completare i simboli.")
+            bits_in_accum -= 1
+            code_bits_used += 1
+            bit = (bit_accum >> bits_in_accum) & 1
             if bit == 0:
                 curr = curr.left
-            elif bit == 1:
-                curr = curr.right
             else:
-                raise ValueError("Flusso di bit terminato inaspettatamente prima di completare i simboli.")
+                curr = curr.right
             if curr is None:
                 raise ValueError("sequenza di bit che non corrisponde a nessun codice")
-        output.append(curr.symbol)
-        curr = root
+        bit_accum &= (1 << bits_in_accum) - 1
+        bits_consumed += code_bits_used
+        output[i] = curr.symbol
 
-    if reader.byte_pos != reader.total_bytes:
+    # --- Controlli finali ---------------------------------------------------
+    # Bit consumati dalla decodifica: tutto il resto deve essere padding zero.
+    # Il numero di byte effettivamente necessari è ceil(bits_consumed / 8).
+    expected_bytes = -(-bits_consumed // 8) if bits_consumed else 0
+    if expected_bytes != data_len:
         raise ValueError("byte in eccesso dopo l'ultimo simbolo")
-    if reader.bit_accum & ((1 << reader.bits_in_accum) - 1):
-        raise ValueError("bit di riempimento diversi da zero")
+    padding_bits = data_len * 8 - bits_consumed
+    if padding_bits > 0:
+        # I bit di riempimento sono gli ultimi 'padding_bits' bit dell'ultimo byte.
+        padding_mask = (1 << padding_bits) - 1
+        if data[-1] & padding_mask:
+            raise ValueError("bit di riempimento diversi da zero")
     return output
 
 
