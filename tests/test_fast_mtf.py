@@ -2,6 +2,7 @@ import unittest
 import numpy as np
 import sys
 import os
+import subprocess
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 
@@ -51,6 +52,45 @@ class TestFastMTF(unittest.TestCase):
         enc = bmtf.secure_encode(text, alphabet, key, block_size)
         dec = bmtf.secure_decode(enc, alphabet, key, block_size)
         self.assertEqual(dec, text)
+
+
+class TestNumbaLoading(unittest.TestCase):
+
+    def setUp(self):
+        self.saved = (fast_mtf.NUMBA_THRESHOLD, fast_mtf._symbols_seen)
+        self.addCleanup(self.restore)
+
+    def restore(self):
+        fast_mtf.NUMBA_THRESHOLD, fast_mtf._symbols_seen = self.saved
+
+    def test_import_does_not_load_numba(self):
+        src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+        code = "import sys, pipeline; sys.exit('numba' in sys.modules)"
+        done = subprocess.run([sys.executable, "-c", code], cwd=src)
+        self.assertEqual(done.returncode, 0)
+
+    def test_python_below_threshold(self):
+        fast_mtf.NUMBA_THRESHOLD = 100
+        fast_mtf._symbols_seen = 0
+        self.assertIsNone(fast_mtf._select_kernels(99))
+
+    def test_compiled_and_python_paths_match(self):
+        np.random.seed(7)
+        data = np.random.randint(0, 256, size=5000).tolist()
+        dictionary = np.random.permutation(256).tolist()
+
+        fast_mtf.NUMBA_THRESHOLD = 1 << 40
+        fast_mtf._symbols_seen = 0
+        python_ranks = fast_mtf.fast_mtf_encode(data, dictionary)
+        python_decoded = fast_mtf.fast_mtf_decode(python_ranks, dictionary)
+
+        fast_mtf.NUMBA_THRESHOLD = 0
+        compiled_ranks = fast_mtf.fast_mtf_encode(data, dictionary)
+        compiled_decoded = fast_mtf.fast_mtf_decode(compiled_ranks, dictionary)
+
+        self.assertEqual(compiled_ranks, python_ranks)
+        self.assertEqual(compiled_decoded, python_decoded)
+        self.assertEqual(compiled_decoded, data)
 
 
 if __name__ == "__main__":

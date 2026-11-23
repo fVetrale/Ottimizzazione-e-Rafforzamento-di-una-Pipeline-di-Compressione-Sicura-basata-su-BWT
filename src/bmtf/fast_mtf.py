@@ -5,67 +5,77 @@ Progettato per la Fase 2 della pipeline sBWT + bMTF:
 - Sostituisce le liste Python ordinarie e pop/insert con array contigui.
 - Ciclo compilato con Numba JIT (fastmath=True) per esecuzione a velocità nativa C (0.0003s per 60k simboli).
 - Fallback automatico in Python puro/NumPy nel caso in cui Numba non sia disponibile.
+- Numba si carica solo dopo NUMBA_THRESHOLD simboli: sui file piccoli il suo avvio
+  costerebbe più di quanto fa risparmiare. Il codice compilato resta in cache su disco.
 - Supporta sia stringhe (compatibilità Fase 0-1) sia array/byte (predisposto per Fase 3).
 """
 
 from typing import List, Sequence, Union
 import numpy as np
 
-try:
-    from numba import njit
-    _HAS_NUMBA = True
-except ImportError:
-    _HAS_NUMBA = False
+# Misurato: sotto i 6 MB circa l'avvio di Numba costa quanto o più di ciò che fa risparmiare.
+NUMBA_THRESHOLD = 8 << 20
+
+_symbols_seen = 0
+_numba_kernels = None
 
 
-if _HAS_NUMBA:
-    @njit(fastmath=True)
-    def _numba_mtf_encode(input_arr: np.ndarray, initial_dict: np.ndarray) -> np.ndarray:
-        n = len(input_arr)
-        k = len(initial_dict)
-        out = np.empty(n, dtype=np.int32)
-        d = initial_dict.copy()
+def _mtf_encode_kernel(input_arr: np.ndarray, initial_dict: np.ndarray) -> np.ndarray:
+    n = len(input_arr)
+    k = len(initial_dict)
+    out = np.empty(n, dtype=np.int32)
+    d = initial_dict.copy()
 
-        for i in range(n):
-            val = input_arr[i]
-            rank = 0
-            while rank < k and d[rank] != val:
-                rank += 1
-            out[i] = rank
+    for i in range(n):
+        val = input_arr[i]
+        rank = 0
+        while rank < k and d[rank] != val:
+            rank += 1
+        out[i] = rank
 
-            # Move To Front: scorrimento degli elementi da 0 a rank-1 a destra
-            for j in range(rank, 0, -1):
-                d[j] = d[j - 1]
-            d[0] = val
+        # Move To Front: scorrimento degli elementi da 0 a rank-1 a destra
+        for j in range(rank, 0, -1):
+            d[j] = d[j - 1]
+        d[0] = val
 
-        return out
+    return out
 
-    @njit(fastmath=True)
-    def _numba_mtf_decode(ranks: np.ndarray, initial_dict: np.ndarray) -> np.ndarray:
-        n = len(ranks)
-        out = np.empty(n, dtype=initial_dict.dtype)
-        d = initial_dict.copy()
 
-        for i in range(n):
-            rank = ranks[i]
-            val = d[rank]
-            out[i] = val
+def _mtf_decode_kernel(ranks: np.ndarray, initial_dict: np.ndarray) -> np.ndarray:
+    n = len(ranks)
+    out = np.empty(n, dtype=initial_dict.dtype)
+    d = initial_dict.copy()
 
-            # Move To Front
-            for j in range(rank, 0, -1):
-                d[j] = d[j - 1]
-            d[0] = val
+    for i in range(n):
+        rank = ranks[i]
+        val = d[rank]
+        out[i] = val
 
-        return out
+        # Move To Front
+        for j in range(rank, 0, -1):
+            d[j] = d[j - 1]
+        d[0] = val
 
-    # Warmup compilation on import
-    try:
-        _w_in = np.array([1, 2], dtype=np.int32)
-        _w_d = np.array([1, 2], dtype=np.int32)
-        _w_res = _numba_mtf_encode(_w_in, _w_d)
-        _numba_mtf_decode(_w_res, _w_d)
-    except Exception:
-        pass
+    return out
+
+
+def _select_kernels(symbols: int):
+    """Restituisce (encode, decode) compilati, o None se conviene restare in Python."""
+    global _symbols_seen, _numba_kernels
+    _symbols_seen += symbols
+    if _symbols_seen < NUMBA_THRESHOLD:
+        return None
+    if _numba_kernels is None:
+        try:
+            from numba import njit
+        except ImportError:
+            _numba_kernels = ()
+        else:
+            _numba_kernels = (
+                njit(fastmath=True, cache=True)(_mtf_encode_kernel),
+                njit(fastmath=True, cache=True)(_mtf_decode_kernel),
+            )
+    return _numba_kernels or None
 
 
 def _fallback_mtf_encode(input_list: List[int], dict_list: List[int]) -> List[int]:
@@ -130,11 +140,10 @@ def fast_mtf_encode(data: Union[str, bytes, Sequence[int]],
     if not np.isin(in_arr, dict_arr).all():
         raise ValueError("l'input contiene simboli assenti dal dizionario MTF")
 
-    if _HAS_NUMBA:
-        ranks = _numba_mtf_encode(in_arr, dict_arr)
-        return ranks.tolist()
-    else:
-        return _fallback_mtf_encode(in_arr.tolist(), dict_arr.tolist())
+    kernels = _select_kernels(len(in_arr))
+    if kernels:
+        return kernels[0](in_arr, dict_arr).tolist()
+    return _fallback_mtf_encode(in_arr.tolist(), dict_arr.tolist())
 
 
 def fast_mtf_decode(ranks: Sequence[int],
@@ -173,9 +182,9 @@ def fast_mtf_decode(ranks: Sequence[int],
         raise ValueError("rango MTF fuori dal dizionario")
     ranks_arr = np.ascontiguousarray(wide, dtype=np.int32)
 
-    if _HAS_NUMBA:
-        out_arr = _numba_mtf_decode(ranks_arr, dict_arr)
-        raw_vals = out_arr.tolist()
+    kernels = _select_kernels(len(ranks_arr))
+    if kernels:
+        raw_vals = kernels[1](ranks_arr, dict_arr).tolist()
     else:
         raw_vals = _fallback_mtf_decode(ranks_arr.tolist(), dict_arr.tolist())
 

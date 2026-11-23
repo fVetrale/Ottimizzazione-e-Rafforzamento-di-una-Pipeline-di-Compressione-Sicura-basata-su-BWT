@@ -4,7 +4,8 @@ The container is the only file written by the compressor. It replaces the
 nine intermediate files and the ``pickle`` serialization of the original
 pipeline. Every field has a fixed type and every section a declared length,
 and the whole container is validated before any section is handed to the
-decoding stages. All integers use network byte order (big endian).
+decoding stages. All integers, including those inside the Huffman table, use
+network byte order (big endian).
 
 Layout::
 
@@ -25,7 +26,9 @@ import struct
 
 
 MAGIC = b"SBWT"
-VERSION = 1
+VERSION = 2
+CODER_HUFFMAN = 1
+SUPPORTED_CODERS = (CODER_HUFFMAN,)
 NONCE_SIZE = 16
 TAG_SIZE = 32
 MAX_BLOCKS = 1_000_000
@@ -35,10 +38,10 @@ MAX_HUFFMAN_TABLE_SIZE = 1 << 20
 _U32_MAX = 0xFFFFFFFF
 _U64_MAX = 0xFFFFFFFFFFFFFFFF
 
-# magic, version, flags, reserved, original_size, bwt_block_size,
+# magic, version, flags, coder, reserved, original_size, bwt_block_size,
 # block_count, bmtf_block_size, symbol_count, metadata_size,
 # huffman_table_size, payload_size, tag_size
-_HEADER = struct.Struct(">4sBBHQIIIQIIQH")
+_HEADER = struct.Struct(">4sBBBBQIIIQIIQH")
 _U32 = struct.Struct(">I")
 HEADER_SIZE = _HEADER.size
 
@@ -59,6 +62,7 @@ class Container:
     metadata: bytes = b""
     huffman_table: bytes = b""
     tag: bytes = b""
+    coder: int = CODER_HUFFMAN
 
 
 def expected_block_count(original_size: int, bwt_block_size: int) -> int:
@@ -97,6 +101,8 @@ def validate(container: Container) -> None:
     if not isinstance(container, Container):
         raise TypeError("container must be a Container")
 
+    if container.coder not in SUPPORTED_CODERS:
+        raise ContainerFormatError(f"unsupported entropy coder: {container.coder}")
     _check_bytes("nonce", container.nonce, allowed_sizes=(NONCE_SIZE,))
     _check_bytes("tag", container.tag, allowed_sizes=(0, TAG_SIZE))
     _check_bytes("metadata", container.metadata, maximum=MAX_METADATA_SIZE)
@@ -141,7 +147,7 @@ def serialize(container: Container) -> bytes:
     """Validate a container and serialize it to one byte string."""
     validate(container)
     header = _HEADER.pack(
-        MAGIC, VERSION, 0, 0,
+        MAGIC, VERSION, 0, container.coder, 0,
         container.original_size, container.bwt_block_size,
         len(container.primary_indices), container.bmtf_block_size,
         container.symbol_count, len(container.metadata),
@@ -162,7 +168,7 @@ def parse(data: bytes) -> Container:
     if len(data) < HEADER_SIZE + NONCE_SIZE:
         raise ContainerFormatError("truncated container header")
 
-    (magic, version, flags, reserved, original_size, bwt_block_size,
+    (magic, version, flags, coder, reserved, original_size, bwt_block_size,
      block_count, bmtf_block_size, symbol_count, metadata_size,
      huffman_size, payload_size, tag_size) = _HEADER.unpack_from(data)
     if magic != MAGIC:
@@ -171,6 +177,8 @@ def parse(data: bytes) -> Container:
         raise ContainerFormatError(f"unsupported container version: {version}")
     if flags != 0 or reserved != 0:
         raise ContainerFormatError("unsupported flags or nonzero reserved field")
+    if coder not in SUPPORTED_CODERS:
+        raise ContainerFormatError(f"unsupported entropy coder: {coder}")
     # Bound the variable sections before slicing, so a forged header cannot
     # make the parser allocate or loop over more than the file contains.
     if block_count > MAX_BLOCKS:
@@ -209,6 +217,7 @@ def parse(data: bytes) -> Container:
         metadata=metadata,
         huffman_table=huffman_table,
         tag=tag,
+        coder=coder,
     )
     validate(container)
     return container

@@ -561,13 +561,15 @@ La suite di test conta ora 72 test, tutti superati:
 
 ### Cosa resta
 
-- **Formato (punto 4).** L'ordine dei byte non è uniforme: il contenitore è big endian,
-  la tabella Huffman little endian. Conviene riservare un campo che identifichi il
-  codificatore (per esempio nel byte `flags`), prima che la fase 5 renda più costoso
-  cambiare il formato. La riga "Struttura esatta dell'header" del piano va chiusa.
-- **Numba (punto 5).** Non è installato nel `.venv`: tutte le misure usano la versione
-  in Python puro della MTF. Vanno ripetuti test e benchmark con
-  `pip install -r requirements.txt`.
+- **Formato (punto 4): fatto il 23/11/2026.** Formato versione 2: tutto in big endian,
+  byte `coder` nell'header (1 = Huffman), dimensione dell'header invariata (54 byte),
+  La riga "Struttura esatta dell'header" del piano è chiusa.
+- **Numba (punto 5): fatto il 23/11/2026.** La prima misura era circa 3,3 volte più
+  lenta, perché la MTF veniva ricompilata a ogni avvio di processo. Ora Numba si carica
+  solo dopo 8 MiB di simboli e usa la cache su disco: sui 17 file di testo la
+  compressione richiede 3,64 s e la decompressione 3,87 s (erano 3,95 e 4,11 s senza
+  Numba), con 78 test superati. A 18 MB Numba fa risparmiare il 13% in compressione e il
+  5% in decompressione. Dettagli in `docs/filippo/fase3-punto4-benchmark-numba.md`.
 - **Fase 4.** La decompressione: BWT inversa e decodifica Huffman veloci.
 - **Fase 5.** Derivazione delle chiavi dal nonce e tag di autenticazione, che chiudono
   i due rischi residui della validazione.

@@ -88,7 +88,7 @@ class TestHuffmanTableValidation(unittest.TestCase):
         for size in range(len(raw)):
             with self.subTest(truncated=size), self.assertRaises(ValueError):
                 deserialize_code_lengths(raw[:size])
-        duplicate = struct.pack("<H", 2) + struct.pack("<HB", 3, 1) + struct.pack("<HB", 3, 1)
+        duplicate = struct.pack(">H", 2) + struct.pack(">HB", 3, 1) + struct.pack(">HB", 3, 1)
         with self.assertRaises(ValueError):
             deserialize_code_lengths(duplicate)
 

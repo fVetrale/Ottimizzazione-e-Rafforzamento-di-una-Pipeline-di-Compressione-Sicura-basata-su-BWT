@@ -125,6 +125,25 @@ class TestParseRejects(unittest.TestCase):
         with self.assertRaises(cf.ContainerFormatError):
             cf.parse(bytes(mutated))
 
+    def test_coder_round_trip(self):
+        self.assertEqual(self.data[6], cf.CODER_HUFFMAN)
+        self.assertEqual(cf.parse(self.data).coder, cf.CODER_HUFFMAN)
+
+    def test_rejects_unknown_coder(self):
+        for coder in (0, 2, 255):
+            mutated = bytearray(self.data)
+            mutated[6] = coder
+            with self.subTest(coder=coder), self.assertRaises(cf.ContainerFormatError):
+                cf.parse(bytes(mutated))
+        with self.assertRaises(cf.ContainerFormatError):
+            cf.serialize(sample(coder=2))
+
+    def test_rejects_previous_version(self):
+        mutated = bytearray(self.data)
+        mutated[4] = 1
+        with self.assertRaisesRegex(cf.ContainerFormatError, "unsupported container version"):
+            cf.parse(bytes(mutated))
+
     def test_parse_requires_bytes(self):
         with self.assertRaises(TypeError):
             cf.parse("SBWT")

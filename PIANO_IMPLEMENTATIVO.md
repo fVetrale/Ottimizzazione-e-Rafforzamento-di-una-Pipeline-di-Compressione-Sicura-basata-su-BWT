@@ -207,7 +207,7 @@ Da discutere quando si arriva alla fase corrispondente. Ogni decisione presa si 
 | 0 | Protocollo di misura | aperta |
 | 1 | Libreria per il suffix array (divsufsort o libsais) | **decisa** |
 | 2 | Libreria Huffman o implementazione nostra | **decisa (17/11/2026): Implementazione nostra Canonical Huffman (lunghezze dei codici)** |
-| 3 | Struttura esatta dell'header | aperta |
+| 3 | Struttura esatta dell'header | **decisa (23/11/2026): versione 2, 54 byte, tutto big endian, byte `coder` (1 = Huffman)** |
 | 5 | KDF e parametri | aperta |
 | 5 | Sorgente pseudocasuale per le permutazioni (SHAKE-256 o HMAC) | aperta |
 | 5 | Dimensione del nonce | aperta |

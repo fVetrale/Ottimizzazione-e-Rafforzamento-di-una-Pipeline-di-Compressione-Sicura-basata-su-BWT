@@ -320,9 +320,9 @@ def serialize_code_lengths(code_lengths: Dict[int, int]) -> bytes:
         [1 byte: lunghezza uint8]
     """
     n = len(code_lengths)
-    out = bytearray(struct.pack("<H", n))
+    out = bytearray(struct.pack(">H", n))
     for sym, length in sorted(code_lengths.items()):
-        out.extend(struct.pack("<HB", int(sym), int(length)))
+        out.extend(struct.pack(">HB", int(sym), int(length)))
     return bytes(out)
 
 
@@ -338,14 +338,14 @@ def deserialize_code_lengths(raw: bytes, offset: int = 0) -> Tuple[Dict[int, int
     """
     if len(raw) < offset + 2:
         raise ValueError("tabella di Huffman troncata")
-    n = struct.unpack_from("<H", raw, offset)[0]
+    n = struct.unpack_from(">H", raw, offset)[0]
     pos = offset + 2
     if len(raw) < pos + 3 * n:
         raise ValueError("tabella di Huffman troncata")
     code_lengths: Dict[int, int] = {}
     previous = -1
     for _ in range(n):
-        sym, length = struct.unpack_from("<HB", raw, pos)
+        sym, length = struct.unpack_from(">HB", raw, pos)
         if sym <= previous:
             raise ValueError("simboli della tabella di Huffman duplicati o non ordinati")
         code_lengths[sym] = length
@@ -363,12 +363,12 @@ def huffman_compress_to_bytes(symbols: Union[Sequence[int], np.ndarray]) -> byte
     """
     num_symbols = len(symbols)
     if num_symbols == 0:
-        return struct.pack("<I", 0)
+        return struct.pack(">I", 0)
 
     encoded_bytes, code_lengths, _ = huffman_encode_symbols(symbols)
     table_bytes = serialize_code_lengths(code_lengths)
 
-    header = struct.pack("<I", num_symbols)
+    header = struct.pack(">I", num_symbols)
     return header + table_bytes + encoded_bytes
 
 
@@ -378,7 +378,7 @@ def huffman_decompress_from_bytes(payload: bytes) -> List[int]:
     """
     if len(payload) < 4:
         return []
-    num_symbols = struct.unpack_from("<I", payload, 0)[0]
+    num_symbols = struct.unpack_from(">I", payload, 0)[0]
     if num_symbols == 0:
         return []
 
