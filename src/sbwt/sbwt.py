@@ -64,23 +64,43 @@ def ibwt_bytes(last_column: bytes, key, primary_index: int) -> bytes:
     ordered_alphabet = sorted(alphabet, key=secret_order.__getitem__)
 
     n = len(last_column)
+    # Indici a 32 bit finché bastano: metà memoria e accessi più veloci.
+    index_type = np.int32 if n < 2**31 else np.int64
+    symbols = np.frombuffer(last_column, dtype=np.uint8)
+
     table = np.zeros(256, dtype=np.uint8)
     for rank, byte_val in enumerate(ordered_alphabet):
         table[byte_val] = rank
 
-    mapped = table[np.frombuffer(last_column, dtype=np.uint8)]
+    mapped = table[symbols]
     P = np.argsort(mapped, kind="stable")
 
-    lf = np.empty(n, dtype=np.intp)
-    lf[P] = np.arange(n, dtype=np.intp)
-    lf_list = lf.tolist()
+    lf = np.empty(n, dtype=index_type)
+    lf[P] = np.arange(n, dtype=index_type)
+    del mapped, P  # non servono più: abbassano il picco di memoria
 
-    result = bytearray(n)
-    row = primary_index
-    for position in range(n - 1, -1, -1):
-        result[position] = last_column[row]
-        row = lf_list[row]
-    return bytes(result)
+    # Pointer jumping. Le righe da visitare sono la catena
+    #     primary_index, LF(primary_index), LF²(primary_index), ...
+    # e la riga visitata al passo i dà il byte in posizione n-1-i del testo.
+    # Invece di seguirla un passo alla volta (n giri di ciclo Python), si
+    # raddoppia: con jump = LF^m, applicare jump alle m righe già note dà in
+    # un solo accesso vettoriale le m righe successive; poi jump[jump] = LF^2m.
+    # Bastano circa log2(n) giri. Le righe visitate sono esattamente le stesse,
+    # nello stesso ordine, del ciclo originale: l'output non cambia, anche su
+    # blocchi corrotti (LF è sempre una permutazione di 0..n-1, quindi ogni
+    # indice resta nell'array) o periodici (LF con più cicli).
+    rows = np.empty(n, dtype=index_type)
+    rows[0] = primary_index
+    jump = lf
+    known = 1
+    while known < n:
+        step = min(known, n - known)
+        rows[known:known + step] = jump[rows[:step]]
+        known += step
+        if known < n:
+            jump = jump[jump]
+
+    return symbols[rows[::-1]].tobytes()
 
 # inversa della BWT che utilizza gli array dei suffissi
 def ibwt_from_suffix(string, key):
