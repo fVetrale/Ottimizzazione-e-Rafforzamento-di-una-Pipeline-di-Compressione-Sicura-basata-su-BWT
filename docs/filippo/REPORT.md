@@ -570,9 +570,74 @@ La suite di test conta ora 72 test, tutti superati:
   compressione richiede 3,64 s e la decompressione 3,87 s (erano 3,95 e 4,11 s senza
   Numba), con 78 test superati. A 18 MB Numba fa risparmiare il 13% in compressione e il
   5% in decompressione. Dettagli in `docs/filippo/fase3-punto4-benchmark-numba.md`.
-- **Fase 4.** La decompressione: BWT inversa e decodifica Huffman veloci.
+- **Fase 4: fatta il 24/11/2026.** Decompressione sui 17 file di testo da 3,87 a
+  3,09 s, sotto i 3,29 s della fase 1. Vedi il riepilogo qui sotto.
 - **Fase 5.** Derivazione delle chiavi dal nonce e tag di autenticazione, che chiudono
   i due rischi residui della validazione.
 - **MPI.** Le versioni MPI usano ancora la pipeline testuale.
 - **Integrazione.** Il branch `fase3-pipeline` va committato e riportato in
   `integrazione`.
+
+---
+
+## Riepilogo complessivo: dalla fase 0 alla fase 4
+
+*24 novembre 2026*
+
+Confronto tra la pipeline originale (fase 0, `baseline_20261116_1218`) e quella attuale
+(dopo la fase 4, `fase_4_3_mtf_inversa`), sui 17 file di testo di Canterbury e Calgary
+(3,46 MB in tutto). Tempi: mediana per file, poi somma. Nella fase 0 `book1` e `book2`
+giravano solo in modalità a blocchi e sono contati così.
+
+| Misura | Fase 0 | Oggi | Variazione |
+|---|---|---|---|
+| **Compressione** (wall) | 15,91 s | **3,89 s** | **4,1× più veloce** (−76%) |
+| Compressione (lavoro interno) | 14,21 s | 2,43 s | 5,8× più veloce |
+| **Decompressione** (wall) | 3,22 s | **3,09 s** | −4% |
+| Decompressione (lavoro interno) | 2,44 s | 1,54 s | −37% |
+| **Dimensione compressa** | 1.743.298 B | **1.062.942 B** | **−39%** |
+| Rapporto di compressione | 1,99 | **3,26** | |
+| Picco di memoria in compressione\* | 2,57 GB | 1,07 GB | −59% |
+| Picco di memoria in decompressione\* | 747 MB | 670 MB | −10% |
+| File supportati (25 tra Canterbury e Calgary) | 20 ok, gli altri non supportati | **25 ok, binari compresi** | |
+
+\* Somma dei picchi dei singoli file: serve a confrontare le due colonne, non è un
+consumo contemporaneo.
+
+### Da dove vengono i guadagni
+
+- **Compressione più veloce:** quasi tutto dalla fase 1 (suffix array con divsufsort),
+  che l'ha portata da 15,9 a 3,8 s.
+- **File più piccoli:** dalla fase 3 (pipeline a byte con Zero-RLE e Huffman canonico).
+- **Decompressione:** la fase 3 l'aveva rallentata fino a 3,87 s (nuovo formato,
+  controlli contro i file manomessi, decodifica in Python). La fase 4 l'ha riportata
+  sotto il punto di partenza. Il lavoro interno cala del 37%; il tempo wall cala poco
+  perché ormai metà di quei 3,09 s è l'avvio di ogni processo (interprete e import,
+  circa 0,09 s per file).
+- **Robustezza:** il decoder rifiuta i file corrotti o manomessi invece di bloccarsi o
+  produrre dati sbagliati, e la pipeline gestisce anche i file binari.
+
+### La fase 4 stadio per stadio
+
+Decompressione sui 17 file di testo (tempo wall e lavoro interno):
+
+| Momento | Wall | Interno | Resoconto |
+|---|---|---|---|
+| Fase 1 (riferimento) | 3,29 s | — | |
+| Inizio fase 4 | 3,87 s | 2,61 s | `fase3-punto4-benchmark-numba.md` |
+| Stadio 1, decodifica Huffman | 3,30 s | 2,14 s | `docs/mattia/fase4-stadio1-huffman.md` |
+| Stadio 2, BWT inversa | 3,19 s | 1,69 s | `docs/sebastiano/fase4-stadio2-bwt-inversa.md`, `docs/filippo/fase4-stadio2-pointer-jumping.md` |
+| Stadio 3, MTF inversa | **3,09 s** | **1,54 s** | `docs/filippo/fase4-stadio3-mtf-inversa.md` |
+
+### Confronto con bzip2 -9 (stessi 17 file)
+
+| | bzip2 | Noi |
+|---|---|---|
+| Dimensione | 976.577 B | 1.062.942 B (**+8,8%**; in fase 0 era +78,5%) |
+| Compressione | 0,35 s | 3,89 s |
+| Decompressione | 0,29 s | 3,09 s |
+
+Sulla dimensione siamo vicini a bzip2. Sui tempi restiamo circa 10 volte più lenti:
+bzip2 è C puro, mentre noi siamo in Python con librerie C. Inoltre facciamo lavoro che
+bzip2 non fa: ordinamento segreto, catena di hash della bMTF e controlli sui file
+manomessi.
