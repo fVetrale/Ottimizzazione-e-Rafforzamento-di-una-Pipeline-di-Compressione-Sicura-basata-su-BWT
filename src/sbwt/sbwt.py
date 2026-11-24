@@ -57,28 +57,29 @@ def ibwt_bytes(last_column: bytes, key, primary_index: int) -> bytes:
     if not 0 <= primary_index < len(last_column):
         raise ValueError("primary_index is outside the transformed block")
 
+    import numpy as np
+
     alphabet = sorted(set(last_column))
     secret_order = customSort.getSecretSort(alphabet, key)
     ordered_alphabet = sorted(alphabet, key=secret_order.__getitem__)
 
-    ranks = [0] * len(last_column)
-    counts = {symbol: 0 for symbol in alphabet}
-    for position, symbol in enumerate(last_column):
-        ranks[position] = counts[symbol]
-        counts[symbol] += 1
+    n = len(last_column)
+    table = np.zeros(256, dtype=np.uint8)
+    for rank, byte_val in enumerate(ordered_alphabet):
+        table[byte_val] = rank
 
-    starts = {}
-    total = 0
-    for symbol in ordered_alphabet:
-        starts[symbol] = total
-        total += counts[symbol]
+    mapped = table[np.frombuffer(last_column, dtype=np.uint8)]
+    P = np.argsort(mapped, kind="stable")
 
-    result = bytearray(len(last_column))
+    lf = np.empty(n, dtype=np.intp)
+    lf[P] = np.arange(n, dtype=np.intp)
+    lf_list = lf.tolist()
+
+    result = bytearray(n)
     row = primary_index
-    for position in range(len(last_column) - 1, -1, -1):
-        symbol = last_column[row]
-        result[position] = symbol
-        row = starts[symbol] + ranks[row]
+    for position in range(n - 1, -1, -1):
+        result[position] = last_column[row]
+        row = lf_list[row]
     return bytes(result)
 
 # inversa della BWT che utilizza gli array dei suffissi
