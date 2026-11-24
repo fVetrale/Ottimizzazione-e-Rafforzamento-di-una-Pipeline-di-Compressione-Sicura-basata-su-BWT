@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 import bmtf.fast_mtf as fast_mtf
 import bmtf.bmtf as bmtf
+import bmtf.mtf as mtf
 
 
 class TestFastMTF(unittest.TestCase):
@@ -52,6 +53,76 @@ class TestFastMTF(unittest.TestCase):
         enc = bmtf.secure_encode(text, alphabet, key, block_size)
         dec = bmtf.secure_decode(enc, alphabet, key, block_size)
         self.assertEqual(dec, text)
+
+
+class TestByteDecode(unittest.TestCase):
+    """I-MTF che produce direttamente bytes (fast_mtf_decode_bytes, mtf.decode)."""
+
+    def setUp(self):
+        saved = (fast_mtf.NUMBA_THRESHOLD, fast_mtf._symbols_seen)
+        self.addCleanup(lambda: _restore_numba_state(saved))
+        fast_mtf.NUMBA_THRESHOLD = 1 << 40  # percorso Python, salvo dove indicato
+
+    def test_known_result(self):
+        # [10,20,30] -> r0: 10 | r1: 20, diz. [20,10,30] | r0: 20 | r2: 30, diz. [30,20,10]
+        self.assertEqual(fast_mtf.fast_mtf_decode_bytes([0, 1, 0, 2], [10, 20, 30]),
+                         bytes([10, 20, 20, 30]))
+        self.assertEqual(fast_mtf.fast_mtf_decode_bytes([0, 1, 2], b"xyz"), b"xyz")
+
+    def test_matches_list_decoder_on_both_paths(self):
+        rng = np.random.default_rng(11)
+        dictionary = rng.permutation(256).tolist()
+        data = rng.integers(0, 256, size=20000).tolist()
+        ranks = fast_mtf.fast_mtf_encode(data, dictionary)
+        expected = bytes(data)
+        self.assertEqual(fast_mtf.fast_mtf_decode_bytes(ranks, dictionary), expected)
+        self.assertEqual(bytes(fast_mtf.fast_mtf_decode(ranks, dictionary)), expected)
+        fast_mtf.NUMBA_THRESHOLD = 0  # percorso compilato
+        self.assertEqual(fast_mtf.fast_mtf_decode_bytes(ranks, dictionary), expected)
+
+    def test_mtf_decode_return_types(self):
+        self.assertEqual(mtf.decode([0, 1, 0, 2], [10, 20, 30]), bytes([10, 20, 20, 30]))
+        self.assertEqual(mtf.decode([1, 1, 13, 1, 1, 1, 0, 0], "abcdefghijklmnopqrstuvwxyz"),
+                         "bananaaa")
+        self.assertEqual(mtf.decode([], [1, 2, 3]), b"")
+        self.assertEqual(mtf.decode([], "abc"), "")
+
+    def test_rejects_ranks_outside_dictionary(self):
+        for threshold in (1 << 40, 0):  # Python e Numba
+            fast_mtf.NUMBA_THRESHOLD = threshold
+            for ranks in ([-1], [256], [0, 3], [2 ** 40]):
+                with self.subTest(threshold=threshold, ranks=ranks):
+                    with self.assertRaisesRegex(ValueError, "fuori dal dizionario"):
+                        mtf.decode(ranks, [0, 1, 2])
+
+    def test_rejects_malformed_ranks(self):
+        # Stessi errori del vecchio decoder: testo non convertibile in interi,
+        # oppure ranghi annidati (array a due dimensioni).
+        cases = ((["a"], "non validi"), ([[1]], "fuori dal dizionario"))
+        for ranks, message in cases:
+            with self.subTest(ranks=ranks):
+                with self.assertRaisesRegex(ValueError, message):
+                    mtf.decode(ranks, list(range(256)))
+
+    def test_float_ranks_behave_as_before(self):
+        # Il vecchio decoder li convertiva con numpy (troncamento): resta così.
+        self.assertEqual(mtf.decode([1.0, 0.0], [10, 20]), bytes([20, 20]))
+
+    def test_out_of_byte_dictionary_only_fails_when_used(self):
+        self.assertEqual(mtf.decode([0, 0], [10, 300, 30]), bytes([10, 10]))
+        with self.assertRaisesRegex(ValueError, r"outside \[0, 255\]"):
+            mtf.decode([1], [10, 300, 30])
+
+    def test_secure_byte_roundtrip_many_blocks(self):
+        rng = np.random.default_rng(3)
+        data = bytes(rng.integers(0, 40, size=5000, dtype=np.uint8))
+        alphabet = list(range(256))
+        enc = bmtf.secure_encode(data, alphabet, "chiave", 700)
+        self.assertEqual(bmtf.secure_decode(enc, alphabet, "chiave", 700, output_bytes=True), data)
+
+
+def _restore_numba_state(saved):
+    fast_mtf.NUMBA_THRESHOLD, fast_mtf._symbols_seen = saved
 
 
 class TestNumbaLoading(unittest.TestCase):

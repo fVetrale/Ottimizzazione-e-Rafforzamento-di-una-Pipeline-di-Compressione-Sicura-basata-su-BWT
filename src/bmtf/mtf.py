@@ -23,12 +23,12 @@ def decode(compressed_text: List[int], dictionary) -> str | bytes:
     Esegue la trasformata inversa Move-To-Front (I-MTF).
     Restituisce str con un alfabeto di caratteri, bytes con un alfabeto di interi.
     """
-    output = fast_mtf.fast_mtf_decode(compressed_text, dictionary)
-    if isinstance(output, str):
-        return output
-    if any(not 0 <= symbol <= 255 for symbol in output):
-        raise ValueError("byte alphabet contains a symbol outside [0, 255]")
-    return bytes(output)
+    if isinstance(dictionary, str) or (len(dictionary) > 0 and isinstance(dictionary[0], str)):
+        return fast_mtf.fast_mtf_decode(compressed_text, dictionary)
+    # Alfabeto di interi: si producono direttamente bytes. Il controllo che ogni
+    # simbolo sia in [0, 255] si fa sul dizionario (256 valori) e non più su
+    # tutto l'output, perché ogni byte prodotto viene dal dizionario.
+    return fast_mtf.fast_mtf_decode_bytes(compressed_text, dictionary)
 
 
 if __name__ == "__main__":

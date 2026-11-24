@@ -191,3 +191,84 @@ def fast_mtf_decode(ranks: Sequence[int],
     if is_str_dict:
         return "".join(chr(c) for c in raw_vals)
     return raw_vals
+
+
+def _byte_table(dictionary) -> Union[bytes, None]:
+    """Il dizionario come bytes, se è fatto solo di interi in [0, 255]; altrimenti None."""
+    if isinstance(dictionary, (bytes, bytearray)):
+        return bytes(dictionary)
+    if isinstance(dictionary, (list, tuple)) and all(
+            type(symbol) is int and 0 <= symbol <= 255 for symbol in dictionary):
+        return bytes(dictionary)
+    return None
+
+
+def _fallback_mtf_decode_bytes(ranks: Sequence[int], table: bytes) -> bytearray:
+    """I-MTF in Python su un dizionario di byte.
+
+    Il dizionario è un bytearray: spostare un simbolo in testa è un memmove su
+    al più 256 byte, molto più rapido di pop/insert su una lista di oggetti
+    Python. Con rango 0 il simbolo è già in testa e non si sposta nulla.
+    """
+    d = bytearray(table)
+    out = bytearray(len(ranks))
+    for i, rank in enumerate(ranks):
+        val = d[rank]
+        out[i] = val
+        if rank:
+            del d[rank]
+            d.insert(0, val)
+    return out
+
+
+def fast_mtf_decode_bytes(ranks: Sequence[int], dictionary: Union[bytes, Sequence[int]]) -> bytes:
+    """
+    I-MTF che restituisce direttamente bytes (alfabeto di interi in [0, 255]).
+
+    Dà lo stesso risultato, e gli stessi errori, di ``bytes(fast_mtf_decode(...))``
+    preceduto dal controllo che ogni byte prodotto sia in [0, 255], ma senza
+    passare da liste di interi e senza scorrere l'output una seconda volta.
+    """
+    if len(ranks) == 0:
+        return b""
+
+    table = _byte_table(dictionary)
+    if table is None:
+        # Dizionario non fatto di byte: percorso generico.
+        return _generic_decode_bytes(ranks, dictionary)
+
+    # I ranghi arrivano da un file non fidato. Il controllo va fatto qui, prima
+    # di qualsiasi accesso: il kernel Numba non controlla i limiti e, nel ciclo
+    # Python, un rango negativo leggerebbe dalla fine del bytearray invece di
+    # dare errore.
+    try:
+        in_range = 0 <= min(ranks) and max(ranks) < len(table)
+    except TypeError:
+        # Ranghi non confrontabili (liste annidate, stringhe, ...): li valuta il
+        # percorso generico, che li converte e li rifiuta come ha sempre fatto.
+        return _generic_decode_bytes(ranks, dictionary)
+    if not in_range:
+        raise ValueError("rango MTF fuori dal dizionario")
+
+    kernels = _select_kernels(len(ranks))
+    if kernels:
+        ranks_arr = np.asarray(ranks, dtype=np.int32)
+        dict_arr = np.frombuffer(table, dtype=np.uint8).astype(np.int32)
+        return kernels[1](ranks_arr, dict_arr).astype(np.uint8).tobytes()
+    try:
+        return bytes(_fallback_mtf_decode_bytes(ranks, table))
+    except TypeError:
+        # Ranghi non interi (per esempio float): stesso trattamento di prima.
+        return _generic_decode_bytes(ranks, dictionary)
+
+
+def _generic_decode_bytes(ranks: Sequence[int], dictionary) -> bytes:
+    """Percorso di prima: I-MTF su liste, poi controllo che ogni byte prodotto sia in [0, 255].
+
+    Serve solo per input che la pipeline non produce mai (dizionari con valori
+    fuori da [0, 255], ranghi non interi), così il comportamento resta identico.
+    """
+    output = fast_mtf_decode(ranks, dictionary)
+    if any(not 0 <= symbol <= 255 for symbol in output):
+        raise ValueError("byte alphabet contains a symbol outside [0, 255]")
+    return bytes(output)
