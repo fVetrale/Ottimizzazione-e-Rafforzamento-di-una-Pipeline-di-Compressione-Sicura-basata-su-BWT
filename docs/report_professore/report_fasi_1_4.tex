@@ -1,0 +1,330 @@
+% Report di avanzamento: fasi 1-4 della pipeline di compressione sicura basata su BWT.
+% Si compila con pdflatex (o latexmk -pdf). Su Overleaf basta incollare l'intero file
+% in un progetto nuovo; ogni \section è autonoma e si può copiare anche separatamente.
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[italian]{babel}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parskip}{0.4em}
+
+\title{Ottimizzazione e rafforzamento di una pipeline\\di compressione sicura basata su BWT\\[0.5em]
+\large Report di avanzamento: fasi prestazionali}
+\author{Filippo NF22500049 \and Mattia Gallucci NF22500127 \and Sebastiano NF22500125}
+\date{26 novembre 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Questo report descrive il lavoro svolto sulla pipeline di compressione sicura basata su
+sBWT e bMTF. Partendo da un'implementazione interamente in Python, lenta e fragile sui file binari, abbiamo sostituito il calcolo del
+suffix array con una libreria nativa, riscritto gli stadi di codifica sui simboli interi,
+portato l'intera pipeline a lavorare su byte con un formato binario validato, e reso più
+veloce la decompressione. Sui file di testo di riferimento la compressione è oggi circa
+quattro volte più veloce, i file compressi sono più piccoli del 39\% e la pipeline accetta
+qualunque tipo di file. La fase dedicata al rafforzamento crittografico, è ancora da
+svolgere: le debolezze di sicurezza dello schema originale sono quindi ancora presenti e
+vengono elencate alla fine del documento.
+\end{abstract}
+
+% ---------------------------------------------------------------------------
+\section{Introduzione}
+
+Il progetto parte da una pipeline di compressione sviluppata in lavori precedenti, che
+combina la compressione con una forma di protezione dei dati.
+La versione di partenza funzionava, ma aveva limiti evidenti. Era molto lenta, perché gli
+algoritmi più costosi erano scritti in Python puro; leggeva i file come testo e quindi
+falliva su qualunque file binario; scriveva su disco diversi file intermedi con i dati in
+chiaro; salvava il risultato con un meccanismo di serializzazione che permette di eseguire
+codice arbitrario aprendo un file manipolato.
+
+Il lavoro è stato organizzato in un piano a fasi, con alcuni principi condivisi:
+\begin{itemize}
+  \item \textbf{restare in Python}, spostando le parti lente su librerie native già
+        esistenti o su codice compilato con Numba, senza scrivere moduli C propri;
+  \item \textbf{misurare prima di ottimizzare}: ogni miglioramento è dimostrato da un
+        confronto prima/dopo fatto sempre con lo stesso protocollo;
+  \item \textbf{verificare a ogni passo}: finché il formato non cambia l'output deve essere
+        identico a quello originale, e quando cambia si verifica che la decompressione
+        restituisca esattamente il file di partenza;
+  \item \textbf{non inventare crittografia}: lo schema sBWT + bMTF resta quello di
+        partenza, cambia il modo in cui è implementato e protetto.
+\end{itemize}
+
+\section{Punto di partenza e metodo di misura}
+
+Prima di modificare il codice abbiamo misurato la versione originale (fase 0), per avere
+un riferimento con cui confrontare ogni passo successivo. Le misure usano i corpus
+standard per la compressione senza perdita (Canterbury, Calgary e, per i file più grandi,
+Large e Silesia) e, come riferimento esterno, \texttt{bzip2 -9}, che usa la stessa famiglia
+di trasformazioni senza la parte di sicurezza.
+
+Per ogni file si misurano il tempo di compressione e di decompressione, la memoria
+massima e il rapporto di compressione, e si verifica che il file decompresso sia identico
+all'originale. Ogni prova gira in un processo separato; salvo dove indicato si eseguono tre
+ripetizioni più una di riscaldamento, e si riporta la mediana. Distinguiamo due tempi: il
+\emph{tempo totale}, che include l'avvio dell'interprete Python e il caricamento delle
+librerie, e il \emph{lavoro interno}, cioè il tempo speso nella pipeline vera e propria.
+
+Il confronto principale riguarda i 17 file di testo di Canterbury e Calgary, gli unici che
+la versione originale riusciva a elaborare: gli altri 8 file dei due corpus sono binari e
+la pipeline originale si interrompeva leggendoli.
+
+% ---------------------------------------------------------------------------
+\section{Fase 1 --- Suffix array con una libreria nativa}
+
+Il calcolo della BWT richiede di ordinare tutti i suffissi del testo; il risultato di
+questo ordinamento si chiama \emph{suffix array}. Nella pipeline originale questo passo
+era svolto da DC3, un algoritmo lineare ma scritto in Python puro, e da solo occupava la
+quasi totalità del tempo di compressione.
+
+La soluzione scelta è stata quella di usare una libreria C già esistente, divsufsort.
+L'ostacolo apparente era che la sBWT non ordina i simboli nell'ordine naturale ma in un
+ordine segreto deciso dalla chiave, mentre una libreria standard conosce solo l'ordine
+numerico dei byte. Passandole il testo così com'è si ottiene una BWT normale, invertibile
+da chiunque, e la protezione scompare. È probabile che sia stato questo il motivo per cui
+nei lavori precedenti la libreria era stata scartata.
+
+L'osservazione chiave è che non serve cambiare l'ordine usato dalla libreria: basta
+cambiare il testo. Prima del calcolo ogni simbolo viene sostituito dalla sua posizione
+nell'ordine segreto. A quel punto ordinare i numeri in modo crescente equivale a ordinare i
+simboli nell'ordine segreto, e la libreria calcola il suffix array segreto senza sapere che
+esiste una chiave. Questa rinomina era già presente nel codice, come primo passo di DC3:
+è bastato accorgersi che dopo di essa si poteva usare qualunque algoritmo.
+
+\paragraph{Verifica.} Il criterio scelto è più forte del semplice round-trip: a parità di
+chiave, la trasformata prodotta con la libreria deve essere identica, simbolo per simbolo,
+a quella prodotta con DC3. Così l'output non cambia e quindi non cambia neanche la
+sicurezza dello schema. La condizione è stata verificata su tutti i file dei corpus.
+
+\paragraph{Risultati.} La sola sBWT è diventata da 24 a 79 volte più veloce, con un
+guadagno che cresce con la dimensione del file; considerando solo il calcolo del suffix
+array si arriva a 140--160 volte. Anche la memoria scende molto (su un file di 4~MB da circa
+1~GB a 280~MB), perché DC3 rappresentava ogni intero come un oggetto Python. Sull'intera
+pipeline la compressione è risultata circa 3,4 volte più veloce: il guadagno è minore
+perché, una volta eliminato il suffix array come collo di bottiglia, il tempo si sposta
+sugli altri stadi. DC3 è rimasto nel codice come termine di confronto.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+File & Dimensione & sBWT con DC3 & sBWT con divsufsort & Rapporto \\
+\midrule
+alice29.txt & 152 KB & 1,47 s & 0,060 s & 24$\times$ \\
+book1       & 769 KB & 5,02 s & 0,116 s & 43$\times$ \\
+world192.txt& 2,5 MB & 20,6 s & 0,295 s & 70$\times$ \\
+bible.txt   & 4,0 MB & 36,5 s & 0,464 s & 79$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Tempo della sola sBWT su file intero, prima e dopo la fase 1.}
+\end{table}
+
+% ---------------------------------------------------------------------------
+\section{Fase 2 --- Codifica sui simboli interi}
+
+Dopo la fase 1 il problema principale non era più la velocità ma la dimensione dei file.
+Nella versione originale la sequenza prodotta dalla MTF veniva convertita in una stringa di
+testo, con cifre e separatori, e la codifica di Huffman lavorava sui singoli caratteri di
+quella stringa. In questo modo la struttura statistica creata da BWT e MTF andava in gran
+parte persa, e i caratteri di formattazione aggiungevano dati inutili.
+
+La fase 2 ha riscritto i tre stadi successivi alla BWT seguendo l'approccio di bzip2:
+\begin{itemize}
+  \item la \textbf{MTF} lavora su array di dimensione fissa invece che su liste Python;
+        il ciclo, sequenziale per natura, può essere compilato con Numba;
+  \item la \textbf{RLE} codifica solo le sequenze di zeri, che dopo BWT e MTF sono la
+        grande maggioranza delle ripetizioni, con una rappresentazione binaria compatta che
+        richiede un numero di simboli logaritmico nella lunghezza della sequenza;
+  \item la \textbf{codifica di Huffman} è stata scritta da noi in forma \emph{canonica}:
+        lavora direttamente sui simboli interi e per ricostruire i codici basta conoscerne
+        le lunghezze, senza salvare l'albero né usare serializzazioni di Python.
+\end{itemize}
+
+L'obiettivo del piano era una riduzione della dimensione di circa il 39\%. È stato
+raggiunto: misurata sulla pipeline completa (dopo la fase 3), la dimensione compressa dei
+17 file di testo scende da 1.743.298 a circa 1.063.000 byte, il 39\% in meno. Su
+\texttt{alice29.txt} il rapporto tra dimensione compressa e originale passa da 0,501 a
+0,310, contro lo 0,284 di bzip2.
+
+% ---------------------------------------------------------------------------
+\section{Fase 3 --- Pipeline a byte e formato binario}
+
+I singoli componenti delle fasi precedenti erano corretti, ma il programma vero e proprio
+era ancora quello originale: leggeva il file come testo, aggiungeva un simbolo sentinella
+per marcare la fine dei dati, scriveva nove file intermedi in chiaro e salvava il risultato
+con \texttt{pickle}. La fase 3 ha costruito la nuova pipeline mettendo insieme i pezzi.
+
+\paragraph{Tutto in memoria e su byte.} I dati vengono letti come byte e non sono più
+interpretati come testo, quindi la pipeline accetta qualunque file. Al posto della
+sentinella, che sottraeva un simbolo ai dati ammessi, per ogni blocco si salva l'\emph{indice
+primario}, come fa bzip2. L'unico file scritto è quello compresso, e la sua assenza di file
+intermedi è verificata automaticamente a ogni esecuzione dei benchmark.
+
+\paragraph{Un formato binario validato.} Il risultato è un unico contenitore con un header a
+campi di tipo e dimensione noti, che sostituisce del tutto \texttt{pickle}. L'header prevede
+già lo spazio per il nonce e per il tag di autenticazione per la fase di sicurezza successiva e un campo che
+identifica il codificatore, così da poterne aggiungere altri in futuro senza rendere
+illeggibili i file esistenti. Ogni compressione usa un nonce casuale, per cui lo stesso
+file compresso due volte con la stessa chiave produce risultati diversi.
+
+\paragraph{Validazione in decompressione.} Un file compresso arriva dall'esterno e può essere
+troncato o manipolato. La regola adottata è che un file non valido deve essere rifiutato
+con un errore di formato: mai bloccare il programma, mai farlo leggere fuori dalla memoria
+prevista, mai fargli allocare memoria senza limite. Ogni stadio controlla il proprio input:
+la coerenza tra i campi dell'header, la correttezza della tabella di Huffman (che deve
+descrivere un codice completo e senza sovrapposizioni), la lunghezza delle sequenze di zeri
+prima di allocarle, i limiti degli indici nella MTF. Per misurare l'efficacia di questi
+controlli abbiamo alterato uno alla volta tutti i byte di un file compresso: l'81\% delle
+alterazioni viene rifiutato e nessuna provoca un crash o un blocco. Le restanti producono
+dati validi ma diversi: senza un meccanismo di autenticazione non si possono riconoscere per
+costruzione, ed è proprio il compito della fase di sicurezza che faremo in seguito.
+
+\paragraph{Problemi trovati lungo il percorso.} Mettendo insieme i componenti sono emersi
+alcuni problemi che i test sui singoli moduli non mostravano:
+\begin{itemize}
+  \item la scrittura dei bit di Huffman aveva un costo quadratico nel numero di simboli, a
+        causa di un accumulatore che non veniva mai svuotato: su un file di 769~KB la codifica
+        impiegava 13,4~s, ridotti a 0,08~s con una correzione minima e senza cambiare l'output;
+  \item i processi paralleli usati per i blocchi potevano bloccarsi definitivamente, per
+        un'interazione nota tra la creazione dei processi per copia e le librerie native già
+        avviate; ora i processi vengono avviati da zero;
+  \item con il suffix array nativo il parallelismo costava più di quanto rendeva sui blocchi
+        piccoli: i blocchi sono ora di dimensione fissa (900~KB, come bzip2 -9) e il
+        parallelismo si attiva solo sui file sopra i 4~MB;
+  \item caricare Numba a ogni avvio rendeva ogni esecuzione circa 3,3 volte più lenta, perché
+        il codice veniva ricompilato ogni volta; ora Numba si attiva solo sui dati molto
+        grandi e conserva il codice compilato su disco.
+\end{itemize}
+
+\paragraph{Scelta del codificatore.} La pipeline originale offriva anche un codificatore
+aritmetico e uno LZW. Dalle misure della fase 0, LZW comprime peggio di Huffman su tutti i
+file, perché dopo BWT e MTF le ripetizioni che sfrutterebbe sono già state eliminate;
+l'aritmetico guadagna circa il 2\% ma decomprime 8--10 volte più lentamente. La nuova
+pipeline usa quindi solo Huffman; il campo nel formato lascia aperta la possibilità di
+modelli più ricchi in futuro.
+
+\paragraph{Risultati.} Tutti i 25 file di Canterbury e Calgary vengono ora compressi e
+decompressi correttamente, contro i 17 della versione originale. La compressione resta ai
+livelli della fase 1, mentre la decompressione era diventata più lenta (da 3,29 a 3,87~s
+sui 17 file di testo), per il nuovo formato, i controlli aggiunti e la decodifica ancora in
+Python. Recuperare questo ritardo era l'obiettivo della fase 4.
+
+% ---------------------------------------------------------------------------
+\section{Fase 4 --- Decompressione veloce}
+
+La decompressione aveva tre stadi che procedevano un simbolo alla volta in Python: la
+decodifica di Huffman, la MTF inversa e la BWT inversa. La fase è stata divisa in tre
+interventi, uno per stadio, misurando dopo ciascuno.
+
+\paragraph{Decodifica di Huffman.} Invece di leggere un bit alla volta e scendere
+nell'albero dei codici, il decodificatore legge un gruppo di bit e trova il simbolo con una
+tabella precalcolata; solo i codici più lunghi passano ancora dall'albero. Durante il lavoro
+è emerso nel lettore di bit lo stesso difetto quadratico già corretto nello scrittore.
+
+\paragraph{BWT inversa.} Invertire la BWT significa seguire una catena di posizioni, in cui
+ogni passo dipende dal precedente: per un blocco da 900~KB sono 900.000 passi, che in Python
+pesano molto. In un primo passo il calcolo della mappa che lega i passi della catena è stato
+reso vettoriale con NumPy. In un secondo passo abbiamo applicato la tecnica del \emph{pointer
+jumping}: si costruiscono salti di 2, 4, 8, \dots{} passi, ciascuno ottenuto con una sola
+operazione vettoriale, e con circa venti operazioni si ricostruisce l'intero blocco. Il
+lavoro totale cresce leggermente, ma si svolge tutto dentro la libreria nativa. Lo stadio è
+passato da 0,98 a 0,23~s sul benchmark completo, e la memoria per blocco è scesa da 52 a
+14~MB. Le posizioni visitate sono esattamente le stesse di prima, quindi l'output è identico
+anche su dati corrotti, e il numero di operazioni dipende solo dalla lunghezza del blocco,
+non dal suo contenuto.
+
+\paragraph{MTF inversa.} L'ultima modifica produce direttamente i byte di uscita, invece di
+passare da liste di interi Python, ed evita una seconda scansione completa dell'output per
+controllarlo, sostituita da un controllo equivalente sul dizionario. Lo stadio è sceso del
+38\%. Il controllo dei limiti sui valori in ingresso resta prima del ciclo: abbiamo
+verificato che, togliendolo, la versione compilata legge fuori dalla memoria e il processo
+va in crash.
+
+Per questa fase il piano prevedeva Numba. Abbiamo invece usato NumPy e tabelle di lookup,
+perché sui file del benchmark il costo di avvio di Numba supera il guadagno; Numba resta in
+uso solo sui dati molto grandi.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrr}
+\toprule
+Momento & Tempo totale & Lavoro interno \\
+\midrule
+Fase 1 (riferimento)          & 3,29 s & --- \\
+Inizio fase 4 (dopo la fase 3)& 3,87 s & 2,61 s \\
+Dopo la decodifica di Huffman & 3,30 s & 2,14 s \\
+Dopo la BWT inversa           & 3,19 s & 1,69 s \\
+Dopo la MTF inversa           & \textbf{3,09 s} & \textbf{1,54 s} \\
+\bottomrule
+\end{tabular}
+\caption{Decompressione dei 17 file di testo durante la fase 4.}
+\end{table}
+
+Il lavoro interno è sceso del 41\% e la decompressione è tornata sotto il livello della
+fase 1. Il tempo totale scende meno, perché ormai circa metà di esso è l'avvio di ogni
+processo (interprete e librerie, circa 0,09~s per file).
+
+% ---------------------------------------------------------------------------
+\section{Risultati complessivi}
+
+La tabella~\ref{tab:complessivo} confronta la versione originale con quella attuale sugli
+stessi 17 file di testo (3,46~MB in tutto).
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrl}
+\toprule
+Misura & Fase 0 & Oggi & Variazione \\
+\midrule
+Compressione (tempo totale)      & 15,91 s & 3,89 s & 4,1$\times$ più veloce \\
+Compressione (lavoro interno)    & 14,21 s & 2,43 s & 5,8$\times$ più veloce \\
+Decompressione (tempo totale)    & 3,22 s  & 3,09 s & $-4\%$ \\
+Decompressione (lavoro interno)  & 2,44 s  & 1,54 s & $-37\%$ \\
+Dimensione compressa             & 1.743.298 B & 1.062.942 B & $-39\%$ \\
+File supportati (Canterbury e Calgary) & 17 su 25 & 25 su 25 & binari compresi \\
+\bottomrule
+\end{tabular}
+\caption{Versione originale e versione attuale a confronto.}
+\label{tab:complessivo}
+\end{table}
+
+Rispetto a bzip2 -9 i file compressi sono più grandi dell'8,8\% (nella versione originale
+erano più grandi del 78,5\%), mentre i tempi restano circa dieci volte superiori. La
+differenza di velocità si spiega con il fatto che bzip2 è scritto interamente in C, mentre
+noi restiamo in Python con librerie native, e con il lavoro che bzip2 non fa: l'ordinamento
+segreto, la permutazione per blocchi della MTF e i controlli contro i file manipolati.
+
+Come verifica finale prima di questo report abbiamo eseguito l'intera suite di test (97
+test, tutti superati) e un ciclo completo di compressione e decompressione su tutti e
+quattro i corpus, compresi i file binari e i file Silesia fino a 10~MB: tutte le 36 prove
+hanno restituito esattamente il file originale.
+
+\section{Prossimo passo: Rafforzamento}
+
+La fase 5, non ancora iniziata, affronta le debolezze elencate sopra usando solo primitive
+standard e librerie consolidate:
+\begin{itemize}
+  \item una \textbf{gerarchia di chiavi}: dalla password e dal nonce del file, tramite una
+        funzione di derivazione lenta pensata per le password, si ottiene una chiave
+        principale, da cui si ricavano chiavi separate per le permutazioni e per
+        l'autenticazione, e infine una chiave per ogni blocco, distinta tra sBWT e bMTF;
+  \item \textbf{permutazioni} generate da un flusso pseudocasuale crittografico, al posto
+        sia del generatore attuale sia della catena di MD5, così che ogni blocco sia
+        indipendente;
+  \item uno schema \textbf{Encrypt-then-MAC}: un tag di autenticazione su header e dati,
+        verificato per primo in decompressione, prima di decodificare qualunque cosa.
+\end{itemize}
+\end{document}
